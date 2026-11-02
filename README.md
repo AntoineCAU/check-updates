@@ -80,13 +80,13 @@ Add a `title_name` entry in `libexec/check-updates/messages.zsh` and a test in `
 
 ## Releasing
 
-Bump `VERSION` in `bin/check-updates`, then push a tag:
+Bump `VERSION` in `bin/check-updates`, add an entry to `CHANGELOG.md`, then push a tag:
 
 ```sh
-git tag v0.2.0 && git push origin main v0.2.0
+git tag v0.2.4 && git push origin main v0.2.4
 ```
 
-Within the hour, the tap's workflow copies `packaging/homebrew/check-updates.rb` to the tap with the new archive URL and sha256 (run it right away with `gh workflow run update-check-updates.yml -R AntoineCAU/homebrew-tap`).
+The release page is created from the changelog entry right away. Within the hour, the tap's workflow copies `packaging/homebrew/check-updates.rb` to the tap with the new archive URL and sha256 (run it right away with `gh workflow run update-check-updates.yml -R AntoineCAU/homebrew-tap`).
 
 ## License
 

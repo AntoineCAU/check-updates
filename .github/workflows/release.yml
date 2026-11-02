@@ -1,0 +1,42 @@
+name: Release
+
+# Publie la page de version (release GitHub) de chaque tag vX.Y.Z, avec les notes de
+# CHANGELOG.md. À la main, pour un tag déjà poussé : gh workflow run release.yml -f tag=vX.Y.Z
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, e.g. v0.2.1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish the release with its CHANGELOG.md notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected tag: $TAG"; exit 1; }
+          version=${TAG#v}
+
+          awk -v v="$version" '/^## /{ p = ($2 == v); next } p' CHANGELOG.md > notes.md
+          grep -q . notes.md || { echo "No CHANGELOG.md entry for $version"; exit 1; }
+          printf '\nUpgrade: `brew upgrade check-updates`\n' >> notes.md
+
+          latest=$(git ls-remote --tags --refs --sort=-v:refname origin 'v*' | head -1 | sed 's#.*refs/tags/##')
+          [ "$TAG" = "$latest" ] && marque=--latest || marque=--latest=false
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md "$marque"
+          else
+            gh release create "$TAG" --verify-tag --title "check-updates $version" --notes-file notes.md "$marque"
+          fi
