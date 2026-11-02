@@ -1,8 +1,13 @@
 name: CI
 
 on:
+  # Pas sur les tags : ils pointent sur un commit déjà testé sur main, et les Mac de
+  # GitHub sont parfois saturés (la tâche échoue alors après 15 min d'attente)
   push:
+    branches: [main]
+    paths-ignore: ["**.md"]
   pull_request:
+    paths-ignore: ["**.md"]
   # Chaque lundi : détecte qu'une nouvelle version de macOS, de Homebrew ou d'un outil
   # a changé un format de sortie, avant que les utilisateurs ne le découvrent
   schedule:
@@ -11,6 +16,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
