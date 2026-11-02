@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.1.0
+VERSION=0.1.1
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -22,15 +22,13 @@ ACTIONS="$LOG_DIR/actions.tsv"     # libellé <tab> commande, issus de la derni�
 SELECTION="$CU_CACHE/selection.tsv" # mises à jour cochées, exécutées par « __run »
 
 # Réglages par défaut, surchargés par le fichier de config
-CHECK_HOUR=9 CHECK_MINUTE=30 TERMINAL_APP="" AI_COMMAND="" LANGUAGE="" SKIP=()
+CHECK_HOUR=9 CHECK_MINUTE=30 TERMINAL_APP="" AI_COMMAND="" SKIP=()
 [[ -r "$CONFIG" ]] && source "$CONFIG"
 mkdir -p "$LOG_DIR" "$CU_CACHE"
 
-# Langue : celle du Mac si elle est traduite, anglais sinon
-[[ -z "$LANGUAGE" ]] && LANGUAGE=$(defaults read -g AppleLanguages 2>/dev/null | sed -n '2s/[^a-z]*\([a-z][a-z]\).*/\1/p')
-[[ -r "$LIB/i18n/$LANGUAGE.zsh" ]] || LANGUAGE=en
+# Textes affichés, toujours en anglais
 typeset -A M
-source "$LIB/i18n/$LANGUAGE.zsh"
+source "$LIB/messages.zsh"
 export LC_TIME="${M[locale]}"
 
 m() { printf -- "${M[$1]}" "${@:2}" } # message traduit, avec arguments printf

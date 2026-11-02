@@ -5,9 +5,6 @@
 # CHECK_HOUR=9
 # CHECK_MINUTE=30
 
-# Language of windows and reports: fr or en (default: the Mac's language)
-# LANGUAGE=en
-
 # Terminal used to run updates: iTerm or Terminal (default: iTerm if installed)
 # TERMINAL_APP=Terminal
 

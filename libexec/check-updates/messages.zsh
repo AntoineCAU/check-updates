@@ -1,4 +1,4 @@
-# English texts (printf formats)
+# User-facing texts (printf formats)
 M=(
   locale "en_US.UTF-8"
 

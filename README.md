@@ -2,8 +2,6 @@
 
 Finds everything that is out of date on a Mac — macOS, apps, command-line tools — and lets you pick what to update from a checklist. Failed updates are reported, with an optional AI diagnosis.
 
-*[Version française plus bas.](#en-français)*
-
 ## Install
 
 ```sh
@@ -57,20 +55,7 @@ Drop a file in `libexec/check-updates/sources/NN-name.zsh` defining:
 - `src_available` — exit 0 if the tool is installed;
 - `src_check` — print one `label<TAB>command` line per update (`#<TAB>text` for a note), exit non-zero if the check failed.
 
-Add a `title_name` entry in `libexec/check-updates/i18n/*.zsh` and a test in `tests/run.zsh`.
-
----
-
-## En français
-
-`check-updates` repère tout ce qui n'est pas à jour sur un Mac (macOS, applications, outils en ligne de commande) et permet de choisir quoi mettre à jour dans une liste à cocher. Les échecs sont récapitulés, avec un diagnostic par une IA en option.
-
-```sh
-brew install antoinecau/tap/check-updates
-check-updates install   # vérification chaque jour à 9h30
-```
-
-Les fenêtres et les rapports sont en français sur un Mac en français. `check-updates doctor` vérifie que tout fonctionne encore après une mise à jour de macOS ou de Homebrew.
+Add a `title_name` entry in `libexec/check-updates/messages.zsh` and a test in `tests/run.zsh`.
 
 ## License
 

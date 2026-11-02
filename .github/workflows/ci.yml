@@ -21,7 +21,7 @@ jobs:
 
       - name: Syntax
         run: |
-          zsh -n bin/check-updates libexec/check-updates/sources/*.zsh libexec/check-updates/i18n/*.zsh
+          zsh -n bin/check-updates libexec/check-updates/sources/*.zsh libexec/check-updates/messages.zsh
           /usr/bin/python3 -I -m py_compile libexec/check-updates/helpers.py
           osacompile -o /tmp/picker.scpt libexec/check-updates/picker.applescript
           osacompile -o /tmp/dialog.scpt libexec/check-updates/dialog.applescript

@@ -6,7 +6,7 @@
 cd "${0:A:h}/.."
 LIB=$PWD/libexec/check-updates T=$'\t'
 typeset -A M
-source "$LIB/i18n/en.zsh"
+source "$LIB/messages.zsh"
 m() { printf -- "${M[$1]}" "${@:2}" }
 helper() { /usr/bin/python3 -I "$LIB/helpers.py" "$@" }
 echecs=0
