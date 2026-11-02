@@ -1,0 +1,362 @@
+#!/bin/zsh
+# check-updates — repère ce qui n'est pas à jour sur un Mac (système, applications,
+# outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
+# https://github.com/AntoineCAU/check-updates
+
+VERSION=0.1.0
+SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
+LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
+T=$'\t'
+zmodload zsh/datetime
+
+typeset -U path
+path=(${PNPM_HOME:-$HOME/Library/pnpm} /opt/homebrew/bin /opt/homebrew/sbin /usr/local/bin $HOME/.local/bin $HOME/.cargo/bin $path /usr/bin /bin /usr/sbin /sbin)
+export HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1
+
+LABEL="io.github.antoinecau.check-updates"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/check-updates/config"
+LOG_DIR="$HOME/Library/Logs/check-updates"
+export CU_CACHE="$HOME/Library/Caches/check-updates"
+ACTIONS="$LOG_DIR/actions.tsv"     # libellé <tab> commande, issus de la dernière vérification
+SELECTION="$CU_CACHE/selection.tsv" # mises à jour cochées, exécutées par « __run »
+
+# Réglages par défaut, surchargés par le fichier de config
+CHECK_HOUR=9 CHECK_MINUTE=30 TERMINAL_APP="" AI_COMMAND="" LANGUAGE="" SKIP=()
+[[ -r "$CONFIG" ]] && source "$CONFIG"
+mkdir -p "$LOG_DIR" "$CU_CACHE"
+
+# Langue : celle du Mac si elle est traduite, anglais sinon
+[[ -z "$LANGUAGE" ]] && LANGUAGE=$(defaults read -g AppleLanguages 2>/dev/null | sed -n '2s/[^a-z]*\([a-z][a-z]\).*/\1/p')
+[[ -r "$LIB/i18n/$LANGUAGE.zsh" ]] || LANGUAGE=en
+typeset -A M
+source "$LIB/i18n/$LANGUAGE.zsh"
+export LC_TIME="${M[locale]}"
+
+m() { printf -- "${M[$1]}" "${@:2}" } # message traduit, avec arguments printf
+helper() { /usr/bin/python3 -I "$LIB/helpers.py" "$@" }
+
+# Fenêtre à boutons ; affiche le bouton cliqué (rien si elle reste sans réponse 4 h,
+# pour ne pas bloquer la vérification du lendemain)
+dialogue() { # titre, texte, boutons… (le dernier est celui par défaut)
+  osascript "$LIB/dialog.applescript" "$@" 2>/dev/null &
+  local pid=$!
+  ( sleep 14400; kill $pid ) >/dev/null 2>&1 &! # sortie fermée : sinon $(dialogue …) attendrait le minuteur
+  local minuteur=$!
+  wait $pid
+  kill $minuteur 2>/dev/null
+}
+
+notifier() { # titre, texte
+  osascript - "$@" <<'EOF' 2>/dev/null
+on run argv
+  display notification (item 2 of argv) with title (item 1 of argv)
+end run
+EOF
+}
+
+# CLI d'IA utilisée pour diagnostiquer un échec : celle de la config, sinon la première trouvée
+ai_command() {
+  [[ "$AI_COMMAND" == none ]] && return
+  if [[ -n "$AI_COMMAND" ]]; then print -r -- "$AI_COMMAND"; return; fi
+  (( $+commands[claude] )) && { print claude; return }
+  (( $+commands[codex] )) && { print codex; return }
+  (( $+commands[gemini] )) && { print "gemini -i"; return }
+}
+
+# ---------------------------------------------------------------------------
+# Vérification
+#
+# Contrat d'une source (libexec/check-updates/sources/NN-nom.zsh) :
+#   src_available  code 0 si l'outil est présent sur ce Mac
+#   src_check      une ligne « libellé<tab>commande » par mise à jour, « #<tab>texte »
+#                  pour une remarque ; code ≠ 0 si la vérification a échoué (outil en
+#                  erreur, format de sortie inattendu…), plutôt que de se croire à jour
+# ---------------------------------------------------------------------------
+
+lancer_source() { # fichier → sortie dans $CU_CACHE/source.{out,err}, code 99 si l'outil est absent
+  ( source "$1"; src_available || exit 99; src_check ) >"$CU_CACHE/source.out" 2>"$CU_CACHE/source.err"
+}
+
+nom_source() { print -r -- "${${1:t:r}#<->-}" }
+
+ajouter_section() { # fichier source, code de retour
+  local nom=$(nom_source "$1") code=$2 lignes notes n=0
+  lignes=$(grep -v "^#$T" "$CU_CACHE/source.out" | grep "$T")
+  notes=$(grep "^#$T" "$CU_CACHE/source.out" | cut -f2-)
+  [[ -n "$lignes" ]] && n=$(print -r -- "$lignes" | wc -l | tr -d ' ')
+
+  print "## ${M[title_$nom]:-$nom} ($n)\n" >> "$RAPPORT"
+  if (( n )); then
+    print -r -- "$lignes" | cut -f1 | sed 's/^/- /' >> "$RAPPORT"
+    print -r -- "$lignes" >> "$ACTIONS"
+    resume+=("${M[title_$nom]:-$nom} $n")
+    (( total += n ))
+  elif (( code == 0 )); then
+    print -r -- "${M[up_to_date]}" >> "$RAPPORT"
+  fi
+  [[ -n "$notes" ]] && print -r -- "$notes" | sed 's/^/> /' >> "$RAPPORT"
+  if (( code )); then
+    erreurs+=("${M[title_$nom]:-$nom}")
+    { print -r -- $'\n'"**⚠ $(m check_failed $code)**"$'\n\n```'; tail -n 8 "$CU_CACHE/source.err"; print '```' } >> "$RAPPORT"
+  fi
+  print >> "$RAPPORT"
+}
+
+verifier() { # [quiet]
+  RAPPORT="$LOG_DIR/$(date +%F).md"
+  total=0 resume=() erreurs=()
+  : > "$ACTIONS"
+  print -r -- "# ${M[report_title]} — $(date '+%A %d %B %Y %H:%M')"$'\n' > "$RAPPORT"
+
+  local f code
+  for f in "$LIB"/sources/*.zsh(N); do
+    (( ${SKIP[(Ie)$(nom_source "$f")]} )) && continue
+    lancer_source "$f"; code=$?
+    (( code == 99 )) || ajouter_section "$f" $code
+  done
+
+  ln -sf "$RAPPORT" "$LOG_DIR/latest.md"
+  find "$LOG_DIR" \( -name '20*.md' -o -name 'run-*.log' \) -mtime +30 -delete
+
+  local titre msg manuelles
+  if (( total )); then
+    manuelles=$(cut -f2 "$ACTIONS" | grep -c '^open ')
+    titre=$(m n_updates $total)
+    msg="$(m auto_manual_count $(( total - manuelles )) $manuelles)"$'\n'"${(j:, :)resume}"
+  else titre=${M[all_good_title]} msg=${M[all_good]}
+  fi
+  (( $#erreurs )) && msg+=$'\n\n'"$(m sources_failed "${(j:, :)erreurs}")"$'\n'"${M[doctor_hint]}"
+  print -r -- "$titre — ${msg//$'\n'/ }"
+  [[ "$1" == quiet ]] && return
+
+  local rep
+  if (( total )); then
+    rep=$(dialogue "$titre" "$msg" "${M[later]}" "${M[report]}" "${M[show]}")
+    [[ "$rep" == "${M[report]}" ]] && open -t "$LOG_DIR/latest.md"
+    [[ "$rep" == "${M[show]}" ]] && choisir
+  elif (( $#erreurs )); then
+    rep=$(dialogue "$titre" "$msg" "${M[close]}" "${M[report]}")
+    [[ "$rep" == "${M[report]}" ]] && open -t "$LOG_DIR/latest.md"
+  else
+    notifier "$titre" "$msg"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Choix des mises à jour puis exécution dans un terminal
+#
+# Une mise à jour dont la commande commence par « open » ne s'installe pas toute seule
+# (macOS, app qui se met à jour elle-même, site de l'éditeur) : elle est rangée à part
+# dans la fenêtre et simplement ouverte, sans passer par le terminal.
+# ---------------------------------------------------------------------------
+
+choisir() {
+  if [[ ! -s "$ACTIONS" ]]; then notifier check-updates "${M[nothing_pending]}"; return; fi
+  local -a libelles commandes automatiques manuelles
+  local l c i choix
+  while IFS=$T read -r l c; do
+    libelles+=("$l") commandes+=("$c")
+    [[ "$c" == open\ * ]] && manuelles+=("$l") || automatiques+=("$l")
+  done < "$ACTIONS"
+
+  choix=$(osascript "$LIB/picker.applescript" "${M[pick_title]}" "${M[pick_hint]}" "${M[update_btn]}" "${M[cancel]}" \
+    "${M[group_auto]}" "${M[group_manual]}" "${automatiques[@]}" --manual-- "${manuelles[@]}" 2>/dev/null)
+  [[ -z "$choix" ]] && return
+
+  local -A ouvertes
+  : > "$SELECTION"
+  for l in "${(@f)choix}"; do
+    i=${libelles[(ie)$l]} c=$commandes[$i]
+    if [[ "$c" == open\ * ]]; then
+      [[ -z "${ouvertes[$c]}" ]] && eval "$c"
+      ouvertes[$c]=1
+    else
+      print -r -- "$l$T$c" >> "$SELECTION"
+    fi
+  done
+  [[ -s "$SELECTION" ]] || return
+
+  local script="$CU_CACHE/check-updates.command" app=$TERMINAL_APP
+  print -r -- "#!/bin/zsh"$'\n'"exec ${(q)SELF} __run" > "$script"
+  chmod +x "$script"
+  [[ -z "$app" ]] && { [[ -d /Applications/iTerm.app ]] && app=iTerm || app=Terminal }
+  open -a "$app" "$script"
+}
+
+executer() {
+  [[ -s "$SELECTION" ]] || return
+  export ZSH="${ZSH:-$HOME/.oh-my-zsh}" NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+
+  local journal="$LOG_DIR/run-$(date +%F-%H%M%S).log" sortie="$CU_CACHE/step.out"
+  local -a reussies echecs
+  local -A deja
+  local l c code details=""
+  while IFS=$T read -r l c <&3; do
+    [[ -n "${deja[$c]}" ]] && continue
+    deja[$c]=1
+    print -P -- $'\n'"%B▶ ${l//\%/%%}%b"
+    print -r -- "▶ $l"$'\n'"\$ $c" >> "$journal"
+    # nvm use default : une étape précédente a pu changer la version de Node par défaut
+    { (( $+functions[nvm] )) && nvm use default --silent >/dev/null 2>&1; eval "$c" } 2>&1 | tee "$sortie"
+    code=${pipestatus[1]}
+    cat "$sortie" >> "$journal"
+    print -r -- "→ code $code"$'\n' >> "$journal"
+    if (( code == 0 )); then
+      reussies+=("$l")
+      print -P -- "%F{green}✔ ${M[step_ok]}%f"
+    else
+      echecs+=("$l")
+      print -P -- "%F{red}✘ $(m step_failed $code)%f"
+      details+="### $l"$'\n'"\$ $c"$'\n'"$(tail -n 60 "$sortie")"$'\n\n'
+    fi
+  done 3< "$SELECTION"
+  rm -f "$SELECTION"
+
+  print -P -- $'\n'"%B${M[rechecking]}%b"
+  "$SELF" --quiet
+
+  if (( ! $#echecs )); then
+    print -P -- $'\n'"%F{green}$(m run_all_ok $#reussies)%f"
+    notifier check-updates "$(m run_all_ok $#reussies)"
+  else
+    print -P -- $'\n'"%F{red}$(m run_some_failed $#reussies $#echecs)%f"
+    local ia=$(ai_command) rep
+    local -a boutons=("${M[close]}" "${M[open_log]}")
+    [[ -n "$ia" ]] && boutons+=("$(m ask_ai ${ia%% *})")
+    rep=$(dialogue "$(m run_some_failed $#reussies $#echecs)" "• ${(pj:\n• :)echecs}" "${boutons[@]}")
+    case "$rep" in
+      "${M[open_log]}") open -t "$journal" ;;
+      "${M[close]}"|"") ;;
+      *) eval "$ia ${(q)$(m ai_prompt "$(sw_vers -productVersion)" "$journal" "$details")}" ;;
+    esac
+  fi
+  print -r -- $'\n'"${M[done]}"
+}
+
+# ---------------------------------------------------------------------------
+# Installation de la vérification quotidienne
+# ---------------------------------------------------------------------------
+
+installer() {
+  mkdir -p "${PLIST:h}" "${CONFIG:h}"
+  [[ -f "$CONFIG" ]] || cp "$LIB/config.example" "$CONFIG"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$LABEL</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>$SELF</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>$CHECK_HOUR</integer>
+		<key>Minute</key>
+		<integer>$CHECK_MINUTE</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>$LOG_DIR/launchd.log</string>
+	<key>StandardErrorPath</key>
+	<string>$LOG_DIR/launchd.log</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null
+  launchctl bootstrap "gui/$UID" "$PLIST" && m installed $CHECK_HOUR $CHECK_MINUTE "$CONFIG"
+}
+
+desinstaller() {
+  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null
+  rm -f "$PLIST"
+  m uninstalled "$CONFIG" "$LOG_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Diagnostic : vérifie que chaque brique fonctionne encore sur ce Mac
+# (après une mise à jour de macOS, de Homebrew ou d'un gestionnaire de paquets)
+# ---------------------------------------------------------------------------
+
+diagnostiquer() {
+  local ko=0 f nom code debut n
+  etat() { # ok|warn|ko|off, texte
+    case $1 in
+      ok) print -P -- "  %F{green}✔%f $2" ;;
+      warn) print -P -- "  %F{yellow}!%f $2" ;;
+      off) print -P -- "  %F{8}–%f $2" ;;
+      *) print -P -- "  %F{red}✘%f $2"; ko=1 ;;
+    esac
+  }
+
+  print -P -- "%Bcheck-updates $VERSION%b — macOS $(sw_vers -productVersion), zsh $ZSH_VERSION${commands[brew]:+, $(brew --version 2>/dev/null | head -1)}"
+
+  print -P -- $'\n'"%B${M[doctor_env]}%b"
+  if /usr/bin/python3 -I -c 'import json, plistlib, urllib.request, xml.etree.ElementTree' 2>/dev/null; then
+    etat ok "$(/usr/bin/python3 --version 2>&1)"
+  else
+    etat ko "python3 — xcode-select --install"
+  fi
+  if osacompile -o "$CU_CACHE/picker.scpt" "$LIB/picker.applescript" 2>"$CU_CACHE/source.err" \
+    && osacompile -o "$CU_CACHE/dialog.scpt" "$LIB/dialog.applescript" 2>>"$CU_CACHE/source.err"; then
+    etat ok "${M[doctor_picker]}"
+  else
+    etat ko "${M[doctor_picker]} : $(tail -1 "$CU_CACHE/source.err")"
+  fi
+  if helper selftest >/dev/null 2>"$CU_CACHE/source.err"; then
+    etat ok "${M[doctor_catalog]}"
+  else
+    etat ko "${M[doctor_catalog]} : $(tail -1 "$CU_CACHE/source.err")"
+  fi
+
+  print -P -- $'\n'"%B${M[doctor_sources]}%b"
+  for f in "$LIB"/sources/*.zsh(N); do
+    nom=$(nom_source "$f")
+    if (( ${SKIP[(Ie)$nom]} )); then etat off "${M[title_$nom]:-$nom} — ${M[doctor_skipped]}"; continue; fi
+    debut=$EPOCHREALTIME
+    lancer_source "$f"; code=$?
+    n=$(grep -v "^#$T" "$CU_CACHE/source.out" | grep -c "$T")
+    case $code in
+      99) etat off "${M[title_$nom]:-$nom} — ${M[doctor_absent]}" ;;
+      0) etat ok "${M[title_$nom]:-$nom} — $(m doctor_found $n) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)" ;;
+      *) etat ko "${M[title_$nom]:-$nom} — code $code"
+         tail -n 4 "$CU_CACHE/source.err" | sed 's/^/      /' ;;
+    esac
+  done
+
+  print -P -- $'\n'"%B${M[doctor_schedule]}%b"
+  if [[ -f "$PLIST" ]] && launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
+    local dernier=$(launchctl print "gui/$UID/$LABEL" | sed -n 's/.*last exit code = //p' | head -1)
+    if [[ "$dernier" == 0 || "$dernier" == *never* || -z "$dernier" ]]; then
+      etat ok "$(m doctor_agent_ok $CHECK_HOUR $CHECK_MINUTE)"
+    else
+      etat ko "$(m doctor_agent_ko "$dernier" "$LOG_DIR/launchd.log")"
+    fi
+  else
+    etat warn "${M[doctor_not_installed]}"
+  fi
+  local ia=$(ai_command)
+  [[ -n "$ia" ]] && etat ok "$(m doctor_ai "$ia")" || etat off "${M[doctor_no_ai]}"
+
+  print
+  if (( ko )); then print -P -- "%F{red}${M[doctor_ko]}%f"; else print -P -- "%F{green}${M[doctor_ok]}%f"; fi
+  return $ko
+}
+
+case "$1" in
+  "") verifier ;;
+  --quiet) verifier quiet ;;
+  --list) choisir ;;
+  __run) executer ;;
+  doctor) diagnostiquer ;;
+  install) installer ;;
+  uninstall) desinstaller ;;
+  -v|--version) print -r -- "check-updates $VERSION" ;;
+  -h|--help|help) print -r -- "${M[help]}" ;;
+  *) m unknown_cmd "$1" >&2; exit 2 ;;
+esac

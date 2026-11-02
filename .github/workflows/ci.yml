@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  # Chaque lundi : détecte qu'une nouvelle version de macOS, de Homebrew ou d'un outil
+  # a changé un format de sortie, avant que les utilisateurs ne le découvrent
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax
+        run: |
+          zsh -n bin/check-updates libexec/check-updates/sources/*.zsh libexec/check-updates/i18n/*.zsh
+          /usr/bin/python3 -I -m py_compile libexec/check-updates/helpers.py
+          osacompile -o /tmp/picker.scpt libexec/check-updates/picker.applescript
+          osacompile -o /tmp/dialog.scpt libexec/check-updates/dialog.applescript
+
+      - name: Parsers (recorded outputs)
+        run: tests/run.zsh
+
+      - name: Doctor (real tools installed on the runner)
+        run: bin/check-updates doctor
+
+      - name: Full check
+        run: |
+          bin/check-updates --quiet
+          cat ~/Library/Logs/check-updates/latest.md

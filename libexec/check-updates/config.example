@@ -1,0 +1,19 @@
+# check-updates settings (zsh syntax). Uncomment to change a value.
+# Run `check-updates install` again after changing the check time.
+
+# Daily check time
+# CHECK_HOUR=9
+# CHECK_MINUTE=30
+
+# Language of windows and reports: fr or en (default: the Mac's language)
+# LANGUAGE=en
+
+# Terminal used to run updates: iTerm or Terminal (default: iTerm if installed)
+# TERMINAL_APP=Terminal
+
+# AI CLI used to diagnose failed updates (default: first found among claude, codex, gemini).
+# Any command that takes the prompt as its last argument works; "none" disables the button.
+# AI_COMMAND="codex"
+
+# Sources to skip: macos brew mas apps node npm pnpm pipx uv cargo rustup gem mise composer omz
+# SKIP=(gem pnpm)
