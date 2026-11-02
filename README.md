@@ -11,7 +11,7 @@ brew install antoinecau/tap/check-updates
 Run `check-updates` whenever you want. It shows its progress, then opens a checklist in two groups:
 
 - **Automatic** (ticked by default): installed right away in your terminal, so you can follow them and type your password when needed;
-- **Up to you**: macOS and apps that update themselves — ticking one opens System Settings, the app or its website.
+- **Up to you**: macOS and apps that update themselves — each has an **Open** button for System Settings, the app or its website.
 
 If an update fails, you get a summary with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it.
 

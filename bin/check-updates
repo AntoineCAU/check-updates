@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.1.3
+VERSION=0.1.4
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -186,34 +186,32 @@ decouper() {
 choisir() {
   if [[ ! -s "$ACTIONS" ]]; then notifier check-updates "${M[nothing_pending]}"; return; fi
   local -a libelles commandes lignes ordre
-  local l c i choix texte erreurs_connues
+  local l c i choix texte erreurs_connues automatiques=0
   while IFS=$T read -r l c; do libelles+=("$l") commandes+=("$c"); done < "$ACTIONS"
-  # Les automatiques d'abord, puis celles à faire soi-même ; ordre[] renvoie à libelles[]
-  for i in {1..$#libelles}; do [[ "$commandes[$i]" != open\ * ]] && { ordre+=($i) lignes+=("A$T$(decouper "$libelles[$i]")") }; done
-  for i in {1..$#libelles}; do [[ "$commandes[$i]" == open\ * ]] && { ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")") }; done
+  # Les automatiques d'abord (cases à cocher), puis celles à faire soi-même (bouton Open,
+  # qui reçoit sa commande) ; ordre[] renvoie à libelles[]
+  for i in {1..$#libelles}; do
+    [[ "$commandes[$i]" != open\ * ]] && { ordre+=($i) lignes+=("A$T$(decouper "$libelles[$i]")"); (( automatiques++ )) }
+  done
+  for i in {1..$#libelles}; do
+    [[ "$commandes[$i]" == open\ * ]] && { ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")$T$commandes[$i]") }
+  done
 
-  texte=${M[pick_hint]}
+  (( automatiques )) && texte=${M[pick_hint]} || texte=${M[pick_hint_manual]}
   erreurs_connues=$(<"$CU_CACHE/last_errors" 2>/dev/null)
   [[ -n "$erreurs_connues" ]] && texte+=$'\n\n'"$(m sources_failed "${(pj:, :)${(f)erreurs_connues}}")"$'\n'"${M[doctor_hint]}"
 
-  choix=$(osascript "$LIB/picker.applescript" "$(nb $#libelles available)" "$texte" "${M[update_btn]}" "${M[later]}" \
+  choix=$(osascript "$LIB/picker.applescript" "$(nb $#libelles available)" "$texte" \
+    "${M[update_btn]}" "${M[later]}" "${M[done_btn]}" "${M[open_btn]}" "${M[opened]}" \
     "${M[group_auto]}" "${M[group_auto_hint]}" "${M[group_manual]}" "${M[group_manual_hint]}" "${lignes[@]}" 2>/dev/null)
   if [[ -z "$choix" ]]; then
-    [[ -t 1 ]] && print -r -- "${M[nothing_selected]}"
+    (( automatiques )) && [[ -t 1 ]] && print -r -- "${M[nothing_selected]}"
     return
   fi
 
-  local -A ouvertes
   : > "$SELECTION"
   for i in "${(@f)choix}"; do
-    l=$libelles[$ordre[$i]] c=$commandes[$ordre[$i]]
-    if [[ "$c" == open\ * ]]; then
-      [[ -t 1 ]] && print -r -- "→ ${${(f)$(decouper "$l")}%%$T*}"
-      [[ -z "${ouvertes[$c]}" ]] && eval "$c"
-      ouvertes[$c]=1
-    else
-      print -r -- "$l$T$c" >> "$SELECTION"
-    fi
+    print -r -- "$libelles[$ordre[$i]]$T$commandes[$ordre[$i]]" >> "$SELECTION"
   done
   [[ -s "$SELECTION" ]] || return
 
