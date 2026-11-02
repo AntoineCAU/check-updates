@@ -2,6 +2,10 @@
 
 Finds everything that is out of date on a Mac — macOS, apps, command-line tools — and lets you pick what to update from a checklist. Failed updates are reported, with an optional AI diagnosis.
 
+![The checklist: automatic updates ticked, major versions unticked, macOS and self-updating apps with an Open button](docs/checklist.png)
+
+Like [Topgrade](https://github.com/topgrade-rs/topgrade), but it checks first and lets you pick; like [Latest](https://github.com/mangerlahn/Latest), but it also covers your command-line tools.
+
 ## Install
 
 ```sh
@@ -15,7 +19,7 @@ Run `check-updates` whenever you want. It checks every source in parallel, shows
 
 Major versions are tagged **major**, and updates Apple labels as security fixes are tagged **security**. **Ignore** hides a version until a newer one comes out (`check-updates ignored` lists them, `check-updates unignore <name>` brings one back). The daily check only opens the window when something new showed up since the last list.
 
-If an update fails, you get a summary with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it.
+If an update fails, you get a summary with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it. After a Homebrew update, old downloads are cleaned up and the freed space is shown. `check-updates history` lists what was updated and when.
 
 ## What it checks
 
@@ -28,9 +32,13 @@ Only what is installed on the Mac is checked.
 | Apps installed without Homebrew | version compared with the public [Homebrew cask catalog](https://formulae.brew.sh), otherwise with the app's Sparkle feed |
 | App Store | [`mas`](https://github.com/mas-cli/mas), if installed |
 | Node.js (nvm), npm and pnpm globals | `nvm`, `npm outdated -g`, `pnpm outdated -g` |
+| Bun and Deno (installed with their own script) | version compared with the latest release, updated with `bun upgrade` / `deno upgrade` |
 | Python tools | `pipx`, `uv tool` (compared with PyPI) |
 | Rust | `rustup check`, `cargo install` binaries (compared with crates.io) |
 | Ruby gems, mise, Composer, Oh My Zsh | `gem outdated`, `mise outdated`, `composer`, git |
+| TeX Live (MacTeX, BasicTeX) | `tlmgr update --list`, and new yearly releases |
+| GitHub CLI extensions | `gh extension upgrade --dry-run` |
+| VS Code extensions | compared with the Visual Studio Marketplace (stable versions that work with your VS Code) |
 
 Nothing is ever installed without you ticking it.
 
@@ -46,11 +54,12 @@ check-updates schedule off         stop the daily check
 check-updates schedule             show whether the daily check is on
 check-updates ignored              list the updates you chose to ignore
 check-updates unignore <name>      show an ignored update again (--all for every one)
+check-updates history [N|--all]    what was updated and when (last 10 runs by default)
 ```
 
-The daily check is off until you turn it on.
+The daily check is off until you turn it on. If the Mac is offline when it runs (often right after waking up), it waits up to 30 minutes for the network, then skips that day quietly. When nothing is new, it only sends a notification: click it to reopen the list (the first time, macOS asks whether check-updates may send notifications).
 
-Reports are written to `~/Library/Logs/check-updates/latest.md`, settings live in `~/.config/check-updates/config` (terminal, AI CLI, sources to skip).
+Reports are written to `~/Library/Logs/check-updates/latest.md`, settings live in `~/.config/check-updates/config` (terminal, AI CLI, Homebrew cleanup, sources to skip).
 
 ## AI diagnosis and privacy
 
@@ -66,7 +75,7 @@ Masking cannot catch every possible secret. Set `AI_COMMAND="none"` in `~/.confi
 
 Each parser rejects output it does not recognise: a source whose format changed is reported as **failed** instead of silently showing “up to date”.
 
-- `check-updates doctor` tests every part on your Mac (Python, the checklist window, the cask catalog, each source) — run it after a macOS or Homebrew upgrade.
+- `check-updates doctor` tests every part on your Mac (Python, the windows and notifications, the network, the cask catalog, each source) — run it after a macOS or Homebrew upgrade.
 - CI runs the parser tests and `doctor` against real tools on GitHub's macOS runners every Monday, to catch upstream changes early.
 
 ## Adding a source
@@ -83,7 +92,7 @@ Add a `title_name` entry in `libexec/check-updates/messages.zsh` and a test in `
 Bump `VERSION` in `bin/check-updates`, add an entry to `CHANGELOG.md`, then push a tag:
 
 ```sh
-git tag v0.2.4 && git push origin main v0.2.4
+git tag v0.3.1 && git push origin main v0.3.1
 ```
 
 The release page is created from the changelog entry right away. Within the hour, the tap's workflow copies `packaging/homebrew/check-updates.rb` to the tap with the new archive URL and sha256 (run it right away with `gh workflow run update-check-updates.yml -R AntoineCAU/homebrew-tap`).

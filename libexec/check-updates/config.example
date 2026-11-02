@@ -10,5 +10,9 @@
 # and you are asked first.
 # AI_COMMAND="codex"
 
-# Sources to skip: macos brew mas apps node npm pnpm pipx uv cargo rustup gem mise composer omz
+# Clean up Homebrew (old downloads and versions) after updating something with brew
+# BREW_CLEANUP=no
+
+# Sources to skip: macos brew mas apps node npm pnpm bun deno pipx uv cargo rustup gem mise
+# tlmgr composer omz gh vscode
 # SKIP=(gem pnpm)

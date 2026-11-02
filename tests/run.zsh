@@ -81,6 +81,63 @@ teste "uv: tools" 61-uv.zsh 'uv() { print "ruff v0.0.1\n- ruff\nzzz-not-on-pypi-
   "ruff 0.0.1 → $(curl -fsS --max-time 10 https://pypi.org/pypi/ruff/json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')${T}uv tool upgrade ruff
 [code 0]"
 
+faux_outil() { # dossier d'installation, nom, sortie de --version → crée $1/bin/$2
+  mkdir -p "$1/bin"
+  print -r -- "#!/bin/sh"$'\n'"echo '$3'" > "$1/bin/$2"
+  chmod +x "$1/bin/$2"
+}
+derniere_npm() { curl -fsS --max-time 10 "https://registry.npmjs.org/$1/latest" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' }
+outils=$(mktemp -d)
+faux_outil "$outils/bun" bun 0.0.1
+faux_outil "$outils/deno" deno "deno 0.0.1 (stable, release, aarch64-apple-darwin)"
+faux_outil "$outils/vieux-deno" deno "deno: unrecognized option"
+
+teste "bun: self-update" 53-bun.zsh "BUN_INSTALL=$outils/bun" \
+  "bun 0.0.1 → $(derniere_npm bun)${T}$outils/bun/bin/bun upgrade
+[code 0]"
+
+teste "deno: self-update" 54-deno.zsh "DENO_INSTALL=$outils/deno" \
+  "deno 0.0.1 → $(curl -fsS --max-time 10 https://dl.deno.land/release-latest.txt | sed 's/^v//')${T}$outils/deno/bin/deno upgrade
+[code 0]"
+
+teste "deno: unknown format fails" 54-deno.zsh "DENO_INSTALL=$outils/vieux-deno" "[code 3]"
+
+teste "tlmgr: packages" 66-tlmgr.zsh 'tlmgr() { [[ $1 == --version ]] && { print "tlmgr revision 73495 (2025-01-12 23:58:09 +0100)\nTeX Live (https://tug.org/texlive) version 2025"; return }; print -r -- "location-url	https://mirror.example/systems/texlive/tlnet
+total-bytes	123456
+end-of-header
+amsmath	u	72364	73000	1234	-	-	-
+newpkg	a	-	73001	99	-	-	-
+local-only	r	73002	72000	0	-	-	-
+end-of-updates" }' \
+  "TeX Live 2025 (2 packages)${T}sudo tlmgr update --self --all
+[code 0]"
+
+teste "tlmgr: new yearly release" 66-tlmgr.zsh 'tlmgr() { [[ $1 == --version ]] && { print "TeX Live (https://tug.org/texlive) version 2024"; return }; print -u2 "tlmgr: Local TeX Live (2024) is older than remote repository (2025)."; return 1 }' \
+  "TeX Live 2024 → 2025 (${M[open_site]})${T}open https://www.tug.org/mactex/
+[code 0]"
+
+teste "tlmgr: unknown format fails" 66-tlmgr.zsh 'tlmgr() { print "Error: something new" }' "[code 3]"
+
+# Sortie réelle de gh 2.x : binaire (tag) et script (commit)
+teste "gh: extensions" 81-gh.zsh 'gh() { print "[     branch]: would have upgraded from fd4f3de8 to 7ed0aff7\n[       dash]: would have upgraded from v4.20.0 to v4.26.2\n[screensaver]: already up to date" }' \
+  "gh-branch (commit 7ed0aff7)${T}gh extension upgrade branch
+gh-dash v4.20.0 → v4.26.2${T}gh extension upgrade dash
+[code 0]"
+
+teste "gh: unknown format fails" 81-gh.zsh 'gh() { print "[dash]: upgrade available (v4.26.2)" }' "[code 3]"
+
+# Marketplace réel : une version 10.0.0 est forcément en retard ; préversions et versions
+# d'autres plateformes ne doivent jamais être proposées
+obtenu=$(print "esbenp.prettier-vscode@10.0.0\neamodio.gitlens@10.0.0" | CU_CODE=/usr/local/bin/code CU_CODE_VERSION=1.144.0 helper vscode 2>&1)
+if [[ "$obtenu" == "eamodio.gitlens 10.0.0 → "<->.<->.<->"$T/usr/local/bin/code --install-extension eamodio.gitlens --force"$'\n'"esbenp.prettier-vscode 10.0.0 → "<->.<->.<->"$T"* ]]; then
+  print -P "%F{green}ok%f   vscode: stable versions from the Marketplace"
+else
+  print -P "%F{red}FAIL%f vscode: $obtenu"; (( echecs++ ))
+fi
+obtenu=$(print "not an extension" | CU_CODE=code CU_CODE_VERSION=1.144.0 helper vscode 2>/dev/null; print "[code $?]")
+[[ "$obtenu" == "[code 3]" ]] && print -P "%F{green}ok%f   vscode: unknown format fails" || { print -P "%F{red}FAIL%f vscode: unknown format → $obtenu"; (( echecs++ )) }
+rm -rf "$outils"
+
 teste "omz: behind" 80-omz.zsh 'git() { [[ $3 == rev-list ]] && print 51; return 0 }' \
   "Oh My Zsh (51 commits behind)${T}ZSH=$HOME/.oh-my-zsh zsh $HOME/.oh-my-zsh/tools/upgrade.sh
 [code 0]"
@@ -123,6 +180,37 @@ faux() { if eval "$2"; then egal "$1" faux vrai; else egal "$1" faux faux; fi }
   RAPPORT=/dev/null ajouter_section "$LIB/sources/20-brew.zsh" 0 "$d"
   egal "only two-field lines become actions" "Good 1.0 → 2.0${T}echo ok" "$(<"$d/actions.tsv")"
   rm -rf "$d"
+  egal "key: gh extension commit" "gh-branch 7ed0aff7" "$(cle "gh-branch (commit 7ed0aff7)")"
+  egal "key: TeX Live" "TeX Live 2025" "$(cle "TeX Live 2025 (12 packages)")"
+
+  LOG_DIR=$(mktemp -d)
+  print -r -- "▶ gh 2.60.0 → 2.61.0"$'\n'"\$ brew upgrade gh"$'\n'"==> Upgrading gh"$'\n'"→ code 0"$'\n' > "$LOG_DIR/run-2026-11-01-091500.log"
+  print -r -- "▶ pnpm 10.0 → 10.1"$'\n'"\$ pnpm add -g pnpm"$'\n'"→ code 1"$'\n'"· brew cleanup"$'\n' > "$LOG_DIR/run-2026-11-02-140312.log"
+  egal "history: newest run first" "2026-11-02 14:03
+  ✘ pnpm 10.0 → 10.1 Failed (exit code 1)
+
+2026-11-01 09:15
+  ✔ gh 2.60.0 → 2.61.0
+
+Full logs: $LOG_DIR/run-*.log" "$(historique | sed $'s/\e\\[[0-9;]*m//g')"
+  egal "history: last run only" "2026-11-02 14:03" "$(historique 1 | head -1 | sed $'s/\e\\[[0-9;]*m//g')"
+  faux "history: rejects a bad count" 'historique abc 2>/dev/null'
+  rm -rf "$LOG_DIR"
+
+  # Nettoyage de Homebrew après une mise à jour par brew (brew simulé : rien n'est supprimé)
+  SELECTION=$(mktemp) LOG_DIR=$(mktemp -d) CU_CACHE=$(mktemp -d) SELF=/usr/bin/true
+  brew() { [[ $1 == cleanup ]] && print "==> This operation has freed approximately 1.2GB of disk space."; return 0 }
+  notifier() { :; }
+  print -r -- "x 1.0 → 2.0${T}brew upgrade x" > "$SELECTION"
+  egal "cleanup: freed space shown after a brew update" "✔ $(m cleanup_freed 1.2GB)" "$(executer 2>&1 | sed $'s/\e\\[[0-9;]*m//g' | grep freed)"
+  print -r -- "y 1.0 → 2.0${T}true" > "$SELECTION"
+  egal "cleanup: skipped without a brew update" "" "$(executer 2>&1 | grep -F "${M[cleaning]}")"
+  rm -rf "$SELECTION" "$LOG_DIR" "$CU_CACHE"
+
+  en_ligne() { return 1 }
+  RESEAU_ESSAIS=2 RESEAU_PAUSE=0
+  sortie=$(attendre_reseau); code=$?
+  egal "offline: scheduled check gives up quietly" "1 ${M[offline_skipped]}" "$code ${sortie#* * }"
   exit $echecs
 ) || (( echecs += $? ))
 

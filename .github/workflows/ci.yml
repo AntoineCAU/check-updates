@@ -39,6 +39,7 @@ jobs:
           /usr/bin/python3 -I -m py_compile libexec/check-updates/helpers.py
           osacompile -o /tmp/picker.scpt libexec/check-updates/picker.applescript
           osacompile -o /tmp/dialog.scpt libexec/check-updates/dialog.applescript
+          osacompile -o /tmp/notifier.app libexec/check-updates/notifier.applescript
 
       - name: Parsers (recorded outputs)
         run: tests/run.zsh

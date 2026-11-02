@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- New sources: Bun and Deno (installed with their own script), TeX Live (`tlmgr`), GitHub CLI extensions and VS Code extensions (stable versions compatible with your VS Code).
+- Offline: in a terminal, check-updates says so right away; the daily check waits up to 30 minutes for the network (the Mac often wakes up before the Wi-Fi), then skips that day without a window full of errors.
+- Clicking a notification no longer opens Script Editor: notifications come from a small check-updates app built on your Mac, and clicking “nothing new” reopens the list. macOS asks once whether it may send notifications.
+- After a Homebrew update, `brew cleanup` runs and shows the freed space (`BREW_CLEANUP=no` in the settings to turn it off).
+- `check-updates history` lists what was updated and when; update logs are kept for a year.
+- `doctor` also checks the notifications and the internet connection.
+
 ## 0.2.3
 
 - AI diagnosis sends a cleaned-up copy of the failed steps only: home folder, user and machine names, and known secret formats (credentials in URLs, bearer tokens, GitHub/npm/OpenAI/Anthropic/AWS/Slack/Stripe keys, `password=`, `token=`…) are masked.

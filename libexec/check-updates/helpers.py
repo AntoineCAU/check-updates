@@ -63,10 +63,11 @@ def remarque(texte):
     print(f"#\t{texte}")
 
 
-def telecharger(url, timeout=10, maximum=MAX_FLUX):
+def telecharger(url, timeout=10, maximum=MAX_FLUX, corps=None, entetes=None):
     if not str(url).startswith(("https://", "http://")):
         raise OSError(f"unsupported URL: {url}")
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+    requete = urllib.request.Request(url, data=corps, headers={**UA, **(entetes or {})})
+    with urllib.request.urlopen(requete, timeout=timeout) as r:
         donnees = r.read(maximum + 1)
     if len(donnees) > maximum:
         raise OSError(f"response too large: {url}")
@@ -199,6 +200,128 @@ def cargo():
     for nom, version in sorted(installes.items()):
         if version_sure(dernieres.get(nom) or "") and plus_recent(dernieres[nom], version):
             sortie(f"{nom} {version} → {dernieres[nom]}", f"cargo install {q(nom)}")
+
+
+def tlmgr():
+    """« tlmgr --machine-readable update --list » : un paquet par ligne entre
+    « end-of-header » et « end-of-updates », trop nombreux pour une ligne chacun."""
+    annee, sudo = sys.argv[2], os.environ.get("CU_PREFIX", "")
+    lignes = sys.stdin.read().replace("\r", "").splitlines()
+    if "end-of-header" not in lignes or "end-of-updates" not in lignes:
+        raise FormatInattendu("tlmgr: end-of-header/end-of-updates missing: " + " / ".join(lignes[:2])[:300])
+    paquets = lignes[lignes.index("end-of-header") + 1:lignes.index("end-of-updates")]
+    n = sum(1 for p in paquets if p.split("\t")[1:2] in (["u"], ["a"]))
+    if n:
+        sortie(f"TeX Live {annee} ({n} package{'s' if n > 1 else ''})", f"{sudo}tlmgr update --self --all")
+
+
+# --- Outils qui se mettent à jour eux-mêmes -----------------------------------
+
+def autonome(nom, installee, derniere, commande):
+    if version_sure(derniere) and plus_recent(derniere, installee):
+        sortie(f"{nom} {installee} → {derniere}", commande)
+
+
+def bun():
+    """Version installée en argument, comparée au paquet npm « bun » publié à chaque version."""
+    chemin, installee = sys.argv[2], sys.stdin.read().strip()
+    if not re.match(r"^\d+\.\d+", installee):
+        raise FormatInattendu(f"bun --version: {installee[:100]}")
+    derniere = json.loads(telecharger("https://registry.npmjs.org/bun/latest"))["version"]
+    autonome("bun", installee, derniere, f"{q(chemin)} upgrade")
+
+
+def deno():
+    """« deno 2.1.4 (stable, release, aarch64-apple-darwin) » comparé à la dernière version."""
+    chemin, texte = sys.argv[2], sys.stdin.read()
+    m = re.match(r"^deno (\d\S*)", texte)
+    if not m:
+        raise FormatInattendu(f"deno --version: {texte[:100]}")
+    derniere = telecharger("https://dl.deno.land/release-latest.txt").decode().strip().lstrip("v")
+    autonome("deno", m.group(1), derniere, f"{q(chemin)} upgrade")
+
+
+def gh():
+    """« [   dash]: would have upgraded from v4.20.0 to v4.26.2 » ; une extension en script
+    n'a qu'un numéro de commit à la place de la version."""
+    for ligne in sys.stdin.read().splitlines():
+        if not ligne.strip():
+            continue
+        m = re.match(r"^\[\s*(\S+)\]: (.*)$", ligne)
+        if not m:
+            raise FormatInattendu(f"gh extension upgrade --dry-run: {ligne[:200]}")
+        nom, reste = m.groups()
+        if reste in ("already up to date", "local extensions can not be upgraded", "pinned extensions can not be upgraded"):
+            continue
+        m = re.match(r"^would have upgraded from (\S+) to (\S+)$", reste)
+        if not m:
+            raise FormatInattendu(f"gh extension upgrade --dry-run: {ligne[:200]}")
+        de, vers = m.groups()
+        if not version_sure(vers):
+            continue
+        commande = f"gh extension upgrade {q(nom)}"
+        if re.match(r"^[0-9a-f]{7,40}$", vers):
+            sortie(f"gh-{nom} (commit {vers})", commande)
+        else:
+            sortie(f"gh-{nom} {de} → {vers}", commande)
+
+
+MARKETPLACE = "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery"
+
+
+def marketplace(ids, toutes):
+    """Versions publiées des extensions, par identifiant en minuscules. Sans « toutes », seule
+    la dernière de chaque plateforme, qui peut être une préversion."""
+    criteres = [{"filterType": 7, "value": i} for i in ids] + [{"filterType": 8, "value": "Microsoft.VisualStudio.Code"}]
+    flags = 0x1 | 0x10 if toutes else 0x200 | 0x10  # IncludeVersions ou IncludeLatestVersionOnly, + propriétés
+    corps = json.dumps({"filters": [{"criteria": criteres, "pageSize": 1000}], "flags": flags}).encode()
+    entetes = {"Accept": "application/json;api-version=3.0-preview.1", "Content-Type": "application/json"}
+    d = json.loads(telecharger(MARKETPLACE, 30, MAX_REGISTRE, corps, entetes))
+    return {f"{e['publisher']['publisherName']}.{e['extensionName']}".lower(): e["versions"] for e in d["results"][0]["extensions"]}
+
+
+def compatible(moteur, code):
+    m = re.match(r"^\s*[\^>=~]*\s*(\d+)\.(\d+)", moteur or "")
+    return not m or [int(m.group(1)), int(m.group(2))] <= morceaux(code)[:2]
+
+
+def version_stable(versions, code):
+    """Plus récente version stable, pour ce Mac et cette version de VS Code."""
+    plateforme = "darwin-arm64" if os.uname().machine == "arm64" else "darwin-x64"
+    retenue = None
+    for v in versions:
+        proprietes = {p["key"]: p["value"] for p in v.get("properties", [])}
+        if (proprietes.get("Microsoft.VisualStudio.Code.PreRelease") != "true"
+                and v.get("targetPlatform") in (None, "universal", plateforme)
+                and compatible(proprietes.get("Microsoft.VisualStudio.Code.Engine"), code)
+                and (retenue is None or plus_recent(v["version"], retenue))):
+            retenue = v["version"]
+    return retenue
+
+
+def vscode():
+    """« publisher.name@1.2.3 » par ligne (code --list-extensions --show-versions)."""
+    cli, code = os.environ["CU_CODE"], os.environ["CU_CODE_VERSION"]
+    installees = {}
+    for ligne in sys.stdin.read().splitlines():
+        if ligne.strip():
+            m = re.match(r"^([\w-]+\.[\w.-]+)@(\S+)$", ligne.strip())
+            if not m:
+                raise FormatInattendu(f"code --list-extensions --show-versions: {ligne[:200]}")
+            installees[m.group(1)] = m.group(2)
+    if not installees:
+        return
+    publiees = marketplace(installees, False)
+    dernieres = {i: version_stable(v, code) for i, v in publiees.items()}
+    # Dernière publiée = préversion ou VS Code trop ancien : toutes les versions, une par une
+    manquantes = [i for i in installees if publiees.get(i.lower()) and not dernieres[i.lower()]]
+    with ThreadPoolExecutor(8) as pool:
+        for complet in pool.map(lambda i: marketplace([i], True), manquantes):
+            dernieres.update({i: version_stable(v, code) for i, v in complet.items()})
+    for ext, version in sorted(installees.items(), key=lambda e: e[0].lower()):
+        derniere = dernieres.get(ext.lower())
+        if derniere and version_sure(derniere) and plus_recent(derniere, version):
+            sortie(f"{ext} {version} → {derniere}", f"{q(cli)} --install-extension {q(ext)} --force")
 
 
 # --- Applications -------------------------------------------------------------
@@ -483,7 +606,8 @@ def selftest():
     print("ok")
 
 
-COMMANDES = {f.__name__: f for f in (brew, npm, pnpm, composer, mise, pipx, uv, cargo, apps, redact, selftest)}
+COMMANDES = {f.__name__: f for f in (brew, npm, pnpm, composer, mise, pipx, uv, cargo, tlmgr, bun, deno, gh, vscode,
+                                      apps, redact, selftest)}
 
 if __name__ == "__main__":
     nom = sys.argv[1] if len(sys.argv) > 1 else ""

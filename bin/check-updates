@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.2.3
+VERSION=0.3.0
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -21,9 +21,11 @@ export CU_CACHE="$HOME/Library/Caches/check-updates"
 ACTIONS="$LOG_DIR/actions.tsv"     # libellé <tab> commande, issus de la dernière vérification
 SELECTION="$CU_CACHE/selection.tsv" # mises à jour cochées, exécutées par « __run »
 IGNORED="${CONFIG:h}/ignored"       # « nom version » des mises à jour ignorées, une par ligne
+NOTIFIER_APP="$HOME/Library/Application Support/check-updates/check-updates.app"
 
 # Réglages par défaut, surchargés par le fichier de config
-CHECK_HOUR=9 CHECK_MINUTE=30 TERMINAL_APP="" AI_COMMAND="" SKIP=()
+CHECK_HOUR=9 CHECK_MINUTE=30 TERMINAL_APP="" AI_COMMAND="" SKIP=() BREW_CLEANUP=yes
+RESEAU_ESSAIS=60 RESEAU_PAUSE=30 # vérification programmée : jusqu'à 30 min d'attente du réseau
 [[ -r "$CONFIG" ]] && source "$CONFIG"
 mkdir -p "$LOG_DIR" "$CU_CACHE"
 
@@ -47,12 +49,55 @@ dialogue() { # titre, texte, boutons… (le dernier est celui par défaut)
   kill $minuteur 2>/dev/null
 }
 
-notifier() { # titre, texte
-  osascript - "$@" <<'EOF' 2>/dev/null
+# Notifications : affichées par une petite app construite sur ce Mac (notifier.applescript),
+# pour qu'un clic fasse quelque chose d'utile ; sinon par osascript, dont le clic ouvre
+# l'Éditeur de scripts
+app_notifications() { # construit l'app si elle manque ou a changé ; code ≠ 0 si impossible
+  local source="$LIB/notifier.applescript" copie="${NOTIFIER_APP:h}/notifier.applescript"
+  [[ -d "$NOTIFIER_APP" ]] && cmp -s "$source" "$copie" && return 0
+  rm -rf "$NOTIFIER_APP"
+  mkdir -p "${NOTIFIER_APP:h}"
+  osacompile -o "$NOTIFIER_APP" "$source" 2>/dev/null || return 1
+  plutil -replace CFBundleIdentifier -string "$LABEL" "$NOTIFIER_APP/Contents/Info.plist" \
+    && plutil -replace LSUIElement -bool true "$NOTIFIER_APP/Contents/Info.plist" \
+    && codesign --force --sign - "$NOTIFIER_APP" 2>/dev/null \
+    && cp "$source" "$copie"
+}
+
+notifier() { # titre, texte, [commande lancée par un clic sur la notification]
+  if app_notifications; then
+    print -rn -- "$3" > "$CU_CACHE/notification-click"
+    print -r -- "$1"$'\n'"$2" > "$CU_CACHE/notification"
+    open -n -g "$NOTIFIER_APP" 2>/dev/null && return
+  fi
+  osascript - "$1" "$2" <<'EOF' 2>/dev/null
 on run argv
   display notification (item 2 of argv) with title (item 1 of argv)
 end run
 EOF
+}
+
+# Une réponse HTTP de l'un de ces sites suffit à dire que le Mac est en ligne
+en_ligne() {
+  local url
+  for url in https://formulae.brew.sh https://www.apple.com; do
+    curl -sSI -o /dev/null --max-time 5 "$url" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# Hors ligne, toutes les sources échoueraient. Dans un terminal on le dit tout de suite ;
+# sous launchd (souvent au réveil du Mac, avant que le Wi-Fi revienne) on attend le réseau
+attendre_reseau() {
+  en_ligne && return 0
+  if [[ -t 1 ]]; then print -r -- "${M[offline]}" >&2; return 1; fi
+  local i
+  for i in {1..$RESEAU_ESSAIS}; do
+    sleep $RESEAU_PAUSE
+    en_ligne && return 0
+  done
+  print -r -- "$(date '+%F %T') ${M[offline_skipped]}"
+  return 1
 }
 
 # CLI d'IA utilisée pour diagnostiquer un échec : celle de la config, sinon la première trouvée
@@ -133,6 +178,7 @@ attente() { # image de l'animation, noms des sources en cours
 }
 
 verifier() { # [quiet]
+  if ! attendre_reseau; then [[ -t 1 ]] && return 1 || return 0; fi # sous launchd, pas un échec de l'outil
   RAPPORT="$LOG_DIR/$(date +%F).md"
   total=0 resume=() erreurs=()
   : > "$ACTIONS"
@@ -181,7 +227,7 @@ verifier() { # [quiet]
 
   ln -sf "$RAPPORT" "$LOG_DIR/latest.md"
   print -l -- "${erreurs[@]}" > "$CU_CACHE/last_errors"
-  find "$LOG_DIR" \( -name '20*.md' -o -name 'run-*.log' \) -mtime +30 -delete
+  find "$LOG_DIR" \( -name '20*.md' -mtime +30 -o -name 'run-*.log' -mtime +365 \) -delete # journaux : « history »
 
   local titre
   if (( total )); then titre=$(nb $total available)
@@ -194,7 +240,7 @@ verifier() { # [quiet]
   if (( total )); then
     # Vérification programmée : la fenêtre ne s'ouvre que s'il y a du nouveau depuis la dernière liste
     if [[ ! -t 1 ]] && ! nouveautes; then
-      notifier "$titre" "${M[nothing_new]}"
+      notifier "$titre" "${M[nothing_new]}" "${(q)SELF} --list"
       return
     fi
     [[ -t 1 ]] && print -r -- "${M[opening_list]}"
@@ -340,7 +386,7 @@ executer() { # [window] : lancé dans un terminal ouvert exprès
   local journal="$LOG_DIR/run-$(date +%F-%H%M%S).log" sortie="$CU_CACHE/step.out"
   local -a reussies echecs
   local -A deja
-  local l c code details=""
+  local l c code details="" brew_mis_a_jour=0 nettoyage liberee
   while IFS=$T read -r l c <&3; do
     [[ -n "${deja[$c]}" ]] && continue
     deja[$c]=1
@@ -353,6 +399,7 @@ executer() { # [window] : lancé dans un terminal ouvert exprès
     print -r -- "→ code $code"$'\n' >> "$journal"
     if (( code == 0 )); then
       reussies+=("$l")
+      [[ "$c" == brew\ * ]] && brew_mis_a_jour=1
       print -P -- "%F{green}✔ ${M[step_ok]}%f"
     else
       echecs+=("$l")
@@ -361,6 +408,18 @@ executer() { # [window] : lancé dans un terminal ouvert exprès
     fi
   done 3< "$SELECTION"
   rm -f "$SELECTION"
+
+  # Homebrew garde les téléchargements et parfois d'anciennes versions : on fait le ménage
+  if (( brew_mis_a_jour )) && [[ "$BREW_CLEANUP" != no ]]; then
+    print -P -- $'\n'"%B${M[cleaning]}%b"
+    nettoyage=$(brew cleanup 2>&1)
+    print -r -- "· brew cleanup"$'\n'"$nettoyage"$'\n' >> "$journal"
+    # « This operation has freed approximately 1.2GB of disk space. »
+    liberee=$(print -r -- "$nettoyage" | sed -nE 's/.*freed approximately ([0-9.]+ ?[KMGT]?B).*/\1/p' | tail -1)
+    if [[ -n "$liberee" ]]; then print -P -- "%F{green}✔ $(m cleanup_freed "$liberee")%f"
+    else print -P -- "%F{green}✔ ${M[cleanup_nothing]}%f"
+    fi
+  fi
 
   print -P -- $'\n'"%B${M[rechecking]}%b"
   "$SELF" --quiet
@@ -398,6 +457,29 @@ designorer() { # nom | --all
        mv "$IGNORED.tmp" "$IGNORED"
        m unignored "$1" ;;
   esac
+}
+
+# Ce qui a été installé et quand, d'après les journaux des mises à jour (gardés un an) :
+# « ▶ libellé » au début de chaque étape, « → code N » à la fin
+historique() { # [nombre de passages | --all]
+  local n=${1:-10} f l ligne date
+  [[ "$n" == --all ]] && n=100000
+  [[ "$n" == <1-> ]] || { m history_usage >&2; return 2 }
+  local -a journaux=("$LOG_DIR"/run-*.log(NOn[1,$n]))
+  if (( ! $#journaux )); then print -r -- "${M[history_none]}"; return; fi
+  for f in "${journaux[@]}"; do
+    date=${${f:t:r}#run-} # 2026-11-02-140312
+    print -P -- "%B${date[1,10]} ${date[12,13]}:${date[14,15]}%b"
+    while IFS= read -r ligne; do
+      case "$ligne" in
+        "▶ "*) l=${ligne#▶ } ;;
+        "→ code 0") print -P -- "  %F{green}✔%f ${l//\%/%%}" ;;
+        "→ code "<->) print -P -- "  %F{red}✘%f ${l//\%/%%} %F{8}$(m step_failed ${ligne#→ code })%f" ;;
+      esac
+    done < "$f"
+    print
+  done
+  m history_logs "${LOG_DIR/#$HOME/~}"
 }
 
 # Diagnostic d'un échec par une CLI d'IA. Seule la sortie des étapes en échec part, après
@@ -511,6 +593,12 @@ diagnostiquer() {
   else
     etat ko "${M[doctor_picker]} : $(tail -1 "$CU_CACHE/source.err")"
   fi
+  if app_notifications && plutil -lint "$NOTIFIER_APP/Contents/Info.plist" >/dev/null; then
+    etat ok "${M[doctor_notifier]}"
+  else
+    etat warn "${M[doctor_notifier]} — ${M[doctor_notifier_ko]}"
+  fi
+  if en_ligne; then etat ok "${M[doctor_network]}"; else etat ko "${M[doctor_network]} — ${M[doctor_offline]}"; fi
   if helper selftest >/dev/null 2>"$CU_CACHE/source.err"; then
     etat ok "${M[doctor_catalog]}"
   else
@@ -563,6 +651,7 @@ case "$1" in
   schedule) programmer "$2" "$3" ;;
   ignored) lister_ignorees ;;
   unignore) designorer "$2" ;;
+  history) historique "$2" ;;
   install) programmer on ;;    # ancien nom (0.1.x)
   uninstall) programmer off ;; # ancien nom (0.1.x)
   -v|--version) print -r -- "check-updates $VERSION" ;;

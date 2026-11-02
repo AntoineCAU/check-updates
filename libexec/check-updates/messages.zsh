@@ -19,13 +19,15 @@ M=(
   all_good "Nothing to update."
   sources_failed "Could not check: %s"
   doctor_hint "Run “check-updates doctor” for details."
+  offline "No internet connection: updates can't be checked. Try again once you're online."
+  offline_skipped "No internet connection for 30 minutes: daily check skipped."
 
   later "Later"
   ok "OK"
   open_report "Open Report"
   opening_list "Opening the list…"
   nothing_selected "Nothing selected. Reopen the list any time: check-updates --list"
-  nothing_new "Nothing new since the last list. See it again: check-updates --list"
+  nothing_new "Nothing new since the last list. Click to see it again."
   now_ignored "Ignored: %s (undo: check-updates unignore <name>)\n"
   ignored_title "Ignored updates (they come back when a newer version is out):"
   ignored_none "No ignored updates."
@@ -68,6 +70,11 @@ M=(
   title_cargo "Cargo"
   title_rustup "Rust (rustup)"
   title_gem "RubyGems"
+  title_bun "Bun"
+  title_deno "Deno"
+  title_tlmgr "TeX Live"
+  title_gh "GitHub CLI extensions"
+  title_vscode "VS Code extensions"
   title_mise "mise"
   title_composer "Composer"
   title_omz "Oh My Zsh"
@@ -75,6 +82,9 @@ M=(
   step_ok "OK"
   step_failed "Failed (exit code %d)"
   rechecking "Checking again…"
+  cleaning "Cleaning up Homebrew…"
+  cleanup_freed "%s of disk space freed."
+  cleanup_nothing "Nothing to clean up."
   run_all_ok "Done: %d installed."
   run_some_failed "%d installed, %d failed:"
   open_log "Open log"
@@ -98,6 +108,10 @@ Explain the likely cause of each failure and suggest a fix. Do not run any comma
 
   doctor_env "Environment"
   doctor_picker "Windows (AppleScript / AppKit)"
+  doctor_notifier "Notifications (clicking one reopens the list)"
+  doctor_notifier_ko "could not build the notification app, plain notifications are used"
+  doctor_network "Internet connection"
+  doctor_offline "offline, every source will fail"
   doctor_catalog "Homebrew app catalog and parsers"
   doctor_sources "Sources"
   doctor_absent "not installed"
@@ -110,6 +124,10 @@ Explain the likely cause of each failure and suggest a fix. Do not run any comma
   doctor_no_ai "no AI CLI found (claude, codex, gemini) to diagnose failures"
   doctor_ok "Everything works."
   doctor_ko "At least one part is failing (see above)."
+
+  history_none "No updates installed with check-updates yet."
+  history_logs "Full logs: %s/run-*.log\n"
+  history_usage "Usage: check-updates history [number of runs | --all]\n"
 
   unknown_cmd "Unknown command: %s (see check-updates --help)\n"
   help "check-updates — finds what is out of date on this Mac and helps you update it.
@@ -124,6 +142,7 @@ Usage:
   check-updates schedule             show whether the daily check is on
   check-updates ignored              list the updates you chose to ignore
   check-updates unignore <name>      show an ignored update again (--all for every one)
+  check-updates history [N|--all]    what was updated and when (last 10 runs by default)
 
 Reports: ~/Library/Logs/check-updates/latest.md
 Settings: ~/.config/check-updates/config"
