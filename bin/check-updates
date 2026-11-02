@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.1.1
+VERSION=0.1.2
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -234,10 +234,31 @@ executer() {
 }
 
 # ---------------------------------------------------------------------------
-# Installation de la vérification quotidienne
+# Vérification quotidienne : désactivée tant qu'on ne lance pas « schedule on »
 # ---------------------------------------------------------------------------
 
-installer() {
+programmer() { # on [HH:MM] | off | rien (affiche l'état)
+  case "$1" in
+    on) [[ -z "$2" ]] || regler_heure "$2" || return 2; activer ;;
+    off) desactiver ;;
+    "") if [[ -f "$PLIST" ]]; then m schedule_on $CHECK_HOUR $CHECK_MINUTE; else print -r -- "${M[schedule_off]}"; fi ;;
+    *) m unknown_cmd "schedule $1" >&2; return 2 ;;
+  esac
+}
+
+regler_heure() { # HH:MM → CHECK_HOUR / CHECK_MINUTE, enregistrés dans la config
+  if [[ ! "$1" =~ '^([01]?[0-9]|2[0-3]):[0-5][0-9]$' ]]; then
+    m bad_time "$1" >&2
+    return 1
+  fi
+  CHECK_HOUR=$(( 10#${1%%:*} )) CHECK_MINUTE=$(( 10#${1##*:} ))
+  mkdir -p "${CONFIG:h}"
+  [[ -f "$CONFIG" ]] || cp "$LIB/config.example" "$CONFIG"
+  sed -i '' -e '/^CHECK_HOUR=/d' -e '/^CHECK_MINUTE=/d' "$CONFIG"
+  print -r -- "CHECK_HOUR=$CHECK_HOUR"$'\n'"CHECK_MINUTE=$CHECK_MINUTE" >> "$CONFIG"
+}
+
+activer() {
   mkdir -p "${PLIST:h}" "${CONFIG:h}"
   [[ -f "$CONFIG" ]] || cp "$LIB/config.example" "$CONFIG"
   cat > "$PLIST" <<EOF
@@ -267,13 +288,13 @@ installer() {
 </plist>
 EOF
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null
-  launchctl bootstrap "gui/$UID" "$PLIST" && m installed $CHECK_HOUR $CHECK_MINUTE "$CONFIG"
+  launchctl bootstrap "gui/$UID" "$PLIST" && m installed $CHECK_HOUR $CHECK_MINUTE
 }
 
-desinstaller() {
+desactiver() {
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null
   rm -f "$PLIST"
-  m uninstalled "$CONFIG" "$LOG_DIR"
+  m uninstalled
 }
 
 # ---------------------------------------------------------------------------
@@ -352,8 +373,9 @@ case "$1" in
   --list) choisir ;;
   __run) executer ;;
   doctor) diagnostiquer ;;
-  install) installer ;;
-  uninstall) desinstaller ;;
+  schedule) programmer "$2" "$3" ;;
+  install) programmer on ;;    # ancien nom (0.1.x)
+  uninstall) programmer off ;; # ancien nom (0.1.x)
   -v|--version) print -r -- "check-updates $VERSION" ;;
   -h|--help|help) print -r -- "${M[help]}" ;;
   *) m unknown_cmd "$1" >&2; exit 2 ;;

@@ -6,10 +6,9 @@ Finds everything that is out of date on a Mac — macOS, apps, command-line tool
 
 ```sh
 brew install antoinecau/tap/check-updates
-check-updates install   # check every day at 9:30
 ```
 
-Every morning, a window shows what is out of date. **Show** opens a checklist; ticked updates run in a terminal window so you can follow them (and type your password when needed). At the end you get a summary of what failed, with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it.
+Run `check-updates` whenever you want: a window shows what is out of date. **Show** opens a checklist; ticked updates run in a terminal window so you can follow them (and type your password when needed). At the end you get a summary of what failed, with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it.
 
 ## What it checks
 
@@ -31,15 +30,18 @@ Nothing is ever installed without you ticking it.
 ## Commands
 
 ```
-check-updates            check, write the report, then offer the updates
-check-updates --list     reopen the list from the last check
-check-updates --quiet    check and write the report, no window
-check-updates doctor     make sure every part still works on this Mac
-check-updates install    check every day (LaunchAgent)
-check-updates uninstall  stop the daily check
+check-updates                      check now, write the report, then offer the updates
+check-updates --list               reopen the list from the last check
+check-updates --quiet              check and write the report, no window
+check-updates doctor               make sure every part still works on this Mac
+check-updates schedule on [HH:MM]  check every day (default 9:30)
+check-updates schedule off         stop the daily check
+check-updates schedule             show whether the daily check is on
 ```
 
-Reports are written to `~/Library/Logs/check-updates/latest.md`, settings live in `~/.config/check-updates/config` (time, language, terminal, AI CLI, sources to skip).
+The daily check is off until you turn it on.
+
+Reports are written to `~/Library/Logs/check-updates/latest.md`, settings live in `~/.config/check-updates/config` (terminal, AI CLI, sources to skip).
 
 ## Staying reliable
 

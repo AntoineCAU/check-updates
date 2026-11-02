@@ -64,8 +64,11 @@ Failed steps and the end of their output:
 Explain the likely cause of each failure and suggest a fix. Do not run any command without my approval."
   done "Done, you can close this window."
 
-  installed "Daily check installed at %02d:%02d.\nSettings: %s (run “check-updates install” again after editing them).\n"
-  uninstalled "Daily check uninstalled.\nSettings (%s) and reports (%s) were kept.\n"
+  installed "Daily check on, every day at %02d:%02d.\nTurn it off with: check-updates schedule off\n"
+  uninstalled "Daily check off.\nCheck any time with: check-updates\nTurn it back on with: check-updates schedule on [HH:MM]\n"
+  schedule_on "Daily check on, every day at %02d:%02d.\n"
+  schedule_off "Daily check off. Turn it on with: check-updates schedule on [HH:MM]"
+  bad_time "Invalid time: %s (expected HH:MM, e.g. 9:30 or 18:00)\n"
 
   doctor_env "Environment"
   doctor_picker "Windows (AppleScript / AppKit)"
@@ -77,7 +80,7 @@ Explain the likely cause of each failure and suggest a fix. Do not run any comma
   doctor_schedule "Schedule"
   doctor_agent_ok "checks every day at %02d:%02d"
   doctor_agent_ko "last run failed (exit code %s), see %s"
-  doctor_not_installed "no daily check: run “check-updates install”"
+  doctor_not_installed "daily check off (turn it on: check-updates schedule on [HH:MM])"
   doctor_ai "failures diagnosed with: %s"
   doctor_no_ai "no AI CLI found (claude, codex, gemini) to diagnose failures"
   doctor_ok "Everything works."
@@ -91,8 +94,9 @@ Usage:
   check-updates --list     reopen the list from the last check
   check-updates --quiet    check and write the report, no window
   check-updates doctor     make sure every part still works on this Mac
-  check-updates install    check every day (LaunchAgent)
-  check-updates uninstall  stop the daily check
+  check-updates schedule on [HH:MM]  check every day (default 9:30)
+  check-updates schedule off         stop the daily check
+  check-updates schedule             show whether the daily check is on
 
 Reports: ~/Library/Logs/check-updates/latest.md
 Settings: ~/.config/check-updates/config"
