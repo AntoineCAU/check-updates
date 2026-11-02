@@ -30,17 +30,45 @@ class FormatInattendu(Exception):
     pass
 
 
+# Les libellés et les commandes viennent en partie d'Internet (flux Sparkle, registres) :
+# une tabulation ou un retour à la ligne permettrait de fabriquer une fausse ligne avec sa
+# propre commande. On les retire de tout ce qui est écrit, et les versions distantes doivent
+# ressembler à une version.
+CONTROLE = re.compile(r"[\x00-\x1f\x7f]+")
+VERSION_SURE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+~_-]{0,63}$")
+MAX_FLUX = 5 * 1024 * 1024  # flux Sparkle
+MAX_REGISTRE = 50 * 1024 * 1024  # PyPI et crates.io listent toutes les versions publiées
+MAX_CATALOGUE = 100 * 1024 * 1024
+
+
+def propre(texte):
+    return CONTROLE.sub(" ", str(texte)).strip()
+
+
+def version_sure(version):
+    return bool(VERSION_SURE.match(str(version)))
+
+
+def q(nom):
+    return shlex.quote(str(nom))
+
+
 def sortie(libelle, commande):
-    print(f"{libelle}\t{commande}")
+    print(f"{propre(libelle)}\t{propre(commande)}")
 
 
 def remarque(texte):
     print(f"#\t{texte}")
 
 
-def telecharger(url, timeout=10):
+def telecharger(url, timeout=10, maximum=MAX_FLUX):
+    if not str(url).startswith(("https://", "http://")):
+        raise OSError(f"unsupported URL: {url}")
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
-        return r.read()
+        donnees = r.read(maximum + 1)
+    if len(donnees) > maximum:
+        raise OSError(f"response too large: {url}")
+    return donnees
 
 
 def lire_json(texte, vide):
@@ -72,7 +100,7 @@ def dernieres_versions(noms, url, extraire):
     """Interroge un registre en parallèle ; ignore les paquets introuvables."""
     def une(nom):
         try:
-            return nom, extraire(json.loads(telecharger(url.format(nom))))
+            return nom, extraire(json.loads(telecharger(url.format(nom), 15, MAX_REGISTRE)))
         except Exception:
             return nom, None
     with ThreadPoolExecutor(8) as pool:
@@ -87,11 +115,11 @@ def brew():
         raise FormatInattendu("brew outdated --json=v2: keys 'formulae'/'casks' missing")
     for f in d["formulae"]:
         if not f.get("pinned"):
-            sortie(f"{f['name']} {f['installed_versions'][-1]} → {f['current_version']}", f"brew upgrade {f['name']}")
+            sortie(f"{f['name']} {f['installed_versions'][-1]} → {f['current_version']}", f"brew upgrade {q(f['name'])}")
     for c in d["casks"]:
         installee = c["installed_versions"]
         installee = installee[-1] if isinstance(installee, list) else installee
-        sortie(f"{c['name']} {installee} → {c['current_version']} (cask)", f"brew upgrade --cask {c['name']}")
+        sortie(f"{c['name']} {installee} → {c['current_version']} (cask)", f"brew upgrade --cask {q(c['name'])}")
 
 
 def npm():
@@ -101,7 +129,7 @@ def npm():
     prefixe = os.environ.get("CU_PREFIX", "")
     for nom, p in d.items():
         if p.get("latest") and p.get("current") != p["latest"]:
-            sortie(f"{nom} {p.get('current')} → {p['latest']}", f"{prefixe}npm install -g {nom}@latest")
+            sortie(f"{nom} {p.get('current')} → {p['latest']}", f"{prefixe}npm install -g {q(nom + '@latest')}")
 
 
 def pnpm():
@@ -109,7 +137,7 @@ def pnpm():
     paquets = d.items() if isinstance(d, dict) else ((p["packageName"], p) for p in d)
     for nom, p in paquets:
         if p.get("latest") and p.get("current") != p["latest"]:
-            sortie(f"{nom} {p.get('current')} → {p['latest']}", f"pnpm add -g {nom}@latest")
+            sortie(f"{nom} {p.get('current')} → {p['latest']}", f"pnpm add -g {q(nom + '@latest')}")
 
 
 def composer():
@@ -119,7 +147,7 @@ def composer():
     if "installed" not in d:
         raise FormatInattendu("composer outdated --format=json: key 'installed' missing")
     for p in d["installed"]:
-        sortie(f"{p['name']} {p['version']} → {p['latest']}", f"composer global update {p['name']} -W")
+        sortie(f"{p['name']} {p['version']} → {p['latest']}", f"composer global update {q(p['name'])} -W")
 
 
 def mise():
@@ -127,7 +155,7 @@ def mise():
     outils = d.values() if isinstance(d, dict) else d
     for o in outils:
         if o.get("latest") and o.get("current") != o["latest"]:
-            sortie(f"{o['name']} {o.get('current')} → {o['latest']}", f"mise upgrade {o['name']}")
+            sortie(f"{o['name']} {o.get('current')} → {o['latest']}", f"mise upgrade {q(o['name'])}")
 
 
 PYPI = "https://pypi.org/pypi/{}/json"
@@ -141,8 +169,8 @@ def pipx():
         installes[paquet["package"]] = paquet["package_version"]
     dernieres = dernieres_versions(installes, PYPI, lambda j: j["info"]["version"])
     for nom, version in sorted(installes.items()):
-        if dernieres.get(nom) and plus_recent(dernieres[nom], version):
-            sortie(f"{nom} {version} → {dernieres[nom]}", f"pipx upgrade {nom}")
+        if version_sure(dernieres.get(nom) or "") and plus_recent(dernieres[nom], version):
+            sortie(f"{nom} {version} → {dernieres[nom]}", f"pipx upgrade {q(nom)}")
 
 
 def uv():
@@ -153,8 +181,8 @@ def uv():
             installes[m.group(1)] = m.group(2)
     dernieres = dernieres_versions(installes, PYPI, lambda j: j["info"]["version"])
     for nom, version in sorted(installes.items()):
-        if dernieres.get(nom) and plus_recent(dernieres[nom], version):
-            sortie(f"{nom} {version} → {dernieres[nom]}", f"uv tool upgrade {nom}")
+        if version_sure(dernieres.get(nom) or "") and plus_recent(dernieres[nom], version):
+            sortie(f"{nom} {version} → {dernieres[nom]}", f"uv tool upgrade {q(nom)}")
 
 
 def cargo():
@@ -167,8 +195,8 @@ def cargo():
             installes[nom] = version
     dernieres = dernieres_versions(installes, "https://crates.io/api/v1/crates/{}", lambda j: j["crate"]["max_stable_version"])
     for nom, version in sorted(installes.items()):
-        if dernieres.get(nom) and plus_recent(dernieres[nom], version):
-            sortie(f"{nom} {version} → {dernieres[nom]}", f"cargo install {nom}")
+        if version_sure(dernieres.get(nom) or "") and plus_recent(dernieres[nom], version):
+            sortie(f"{nom} {version} → {dernieres[nom]}", f"cargo install {q(nom)}")
 
 
 # --- Applications -------------------------------------------------------------
@@ -183,7 +211,7 @@ def catalogue_casks():
     except (OSError, ValueError):
         pass
     try:
-        brut = telecharger(CASK_URL, 30)
+        brut = telecharger(CASK_URL, 30, MAX_CATALOGUE)
         d = json.loads(brut)
     except Exception as e:
         if not os.path.exists(chemin):
@@ -264,6 +292,10 @@ def apps_installees():
 
 def lire_appcast(donnees):
     """Dernière version stable d'un flux Sparkle : (version courte, numéro de build)."""
+    # Le Python d'Apple embarque un expat sans protection contre l'expansion d'entités
+    # (« billion laughs ») : un flux Sparkle n'a jamais de DTD, on refuse ceux qui en ont
+    if b"<!DOCTYPE" in donnees or b"<!ENTITY" in donnees:
+        raise FormatInattendu("appcast with a DTD refused")
     meilleure = None
     for item in ET.fromstring(donnees).iter("item"):
         if item.find(SPARKLE + "channel") is not None:
@@ -281,7 +313,7 @@ def lire_appcast(donnees):
 def via_sparkle(args):
     nom, chemin, info = args
     try:
-        courte, build = lire_appcast(telecharger(info["SUFeedURL"], 8))
+        courte, build = lire_appcast(telecharger(str(info["SUFeedURL"]), 8))
     except Exception:
         return None  # flux injoignable ou illisible : on n'invente rien pour cette app
     installee_courte = str(info.get("CFBundleShortVersionString", ""))
@@ -292,8 +324,8 @@ def via_sparkle(args):
         nouvelle, installee, dispo = plus_recent(build, installee_build), installee_build, build
     else:
         return None
-    if nouvelle:
-        dispo = re.sub(r"^[^0-9]*", "", dispo)
+    dispo = re.sub(r"^[^0-9]*", "", dispo)
+    if nouvelle and version_sure(dispo):
         return f"{nom[:-4]} {installee} → {dispo} ({os.environ.get('CU_OPEN_APP', 'open')})", f"open -a {shlex.quote(chemin)}"
     return None
 
@@ -328,13 +360,17 @@ def apps():
                 pour_sparkle.append((nom, chemin, info))
             continue
         installee = str(info.get("CFBundleShortVersionString", ""))
-        dispo = str(cask["version"])
+        dispo = str(cask["version"]).split(",")[0]
+        if not version_sure(dispo):
+            continue
         if plus_recent(dispo, installee):
             if cask.get("auto_updates"):
                 action, commande = os.environ.get("CU_OPEN_APP", "open"), f"open -a {shlex.quote(chemin)}"
+            elif str(cask.get("homepage", "")).startswith(("https://", "http://")):
+                action, commande = os.environ.get("CU_OPEN_SITE", "website"), f"open {q(cask['homepage'])}"
             else:
-                action, commande = os.environ.get("CU_OPEN_SITE", "website"), f"open {shlex.quote(cask['homepage'])}"
-            sortie(f"{nom[:-4]} {installee} → {dispo.split(',')[0]} ({action})", commande)
+                continue
+            sortie(f"{nom[:-4]} {installee} → {dispo} ({action})", commande)
 
     with ThreadPoolExecutor(8) as pool:
         for resultat in pool.map(via_sparkle, pour_sparkle):
@@ -361,6 +397,14 @@ def selftest():
     assert not plus_recent("2024.05", "5.1"), "different version schemes must not be compared"
     assert not plus_recent("latest", "1.0")
     assert lire_appcast(APPCAST_EXEMPLE) == ("1.3.0", "130"), lire_appcast(APPCAST_EXEMPLE)
+    assert propre("a\tb\nc") == "a b c"
+    assert version_sure("4.97.0") and version_sure("1.0b3") and version_sure("v2.1+build.5")
+    try:
+        lire_appcast(b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa">]><rss>&a;</rss>')
+        raise AssertionError("appcast with a DTD must be refused")
+    except FormatInattendu:
+        pass
+    assert not version_sure("9.9\nEvil\tcurl x | sh") and not version_sure("1.0; rm -rf ~") and not version_sure("")
 
     catalogue = catalogue_casks()
     verifier_catalogue(catalogue)

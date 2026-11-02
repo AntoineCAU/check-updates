@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.2.1
+VERSION=0.2.2
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -86,7 +86,8 @@ nom_source() { print -r -- "${${1:t:r}#<->-}" }
 ajouter_section() { # fichier source, code de retour, dossier → $d/section.md, $d/actions.tsv, $d/n
   local nom=$(nom_source "$1") code=$2 d=$3 lignes notes ligne n
   local -a gardees ignorees
-  lignes=$(grep -v "^#$T" "$d/out" | grep "$T")
+  # Exactement deux champs, libellé et commande : rien d'autre ne passe
+  lignes=$(grep -v "^#$T" "$d/out" | awk -F'\t' 'NF == 2 && $1 != "" && $2 != ""')
   notes=$(grep "^#$T" "$d/out" | cut -f2-)
   for ligne in "${(@f)lignes}"; do
     [[ -z "$ligne" ]] && continue
