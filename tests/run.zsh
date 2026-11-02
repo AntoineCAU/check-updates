@@ -95,6 +95,32 @@ for json attendu in \
   [[ "$obtenu" == "$attendu" ]] && print -P "%F{green}ok%f   composer: ${json[1,20]//$'\n'/ }…" || { print -P "%F{red}FAIL%f composer: $json → $obtenu"; (( echecs++ )) }
 done
 
+# Fonctions du script principal (chargé sans lancer de commande)
+egal() { # nom, attendu, obtenu
+  if [[ "$3" == "$2" ]]; then print -P "%F{green}ok%f   $1"
+  else print -P "%F{red}FAIL%f $1"; print -r -- "  expected: ${(q+)2}"$'\n'"  got:      ${(q+)3}"; (( echecs++ )); fi
+}
+vrai() { if eval "$2"; then egal "$1" vrai vrai; else egal "$1" vrai faux; fi }
+faux() { if eval "$2"; then egal "$1" faux vrai; else egal "$1" faux faux; fi }
+(
+  echecs=0
+  source bin/check-updates
+  egal "split: versions and generic hint" "Docker${T}4.83.0 → 4.97.0" "$(decouper "Docker 4.83.0 → 4.97.0 (${M[open_app]})")"
+  egal "split: specific note kept" "Node${T}v24.11.0 → v24.22.2 · same major" "$(decouper "Node v24.11.0 → v24.22.2 (same major)")"
+  egal "split: version without arrow" "macOS Tahoe${T}26.7.2" "$(decouper "macOS Tahoe 26.7.2 (${M[settings]})")"
+  egal "key: name and target version" "Docker 4.97.0" "$(cle "Docker 4.83.0 → 4.97.0 (${M[open_app]})")"
+  egal "key: macOS" "macOS 27.2" "$(cle "macOS 27.2 (${M[settings]})")"
+  vrai "major: 23 → 26" 'majeure "DBeaver 23.2.1 → 26.2.4"'
+  faux "major: 4.83 → 4.97" 'majeure "Docker 4.83.0 → 4.97.0"'
+  faux "major: v24 → v24" 'majeure "Node v24.11.0 → v24.22.2 (same major)"'
+  vrai "major: macOS above the installed one" 'majeure "macOS 999.1 (${M[settings]})"'
+  faux "major: macOS same as installed" 'majeure "macOS $(sw_vers -productVersion) (${M[settings]})"'
+  egal "tag: security" security "$(etiquette "Background Security Improvement 26.5.1 (${M[settings]})" "open x")"
+  egal "tag: major for automatic updates" major "$(etiquette "node 22.1.0 → 24.0.0" "brew upgrade node")"
+  egal "tag: none for self-updating apps" "" "$(etiquette "Firefox 157.0.1 → 159.0 (${M[open_app]})" "open -a Firefox")"
+  exit $echecs
+) || (( echecs += $? ))
+
 if helper selftest >/dev/null; then print -P "%F{green}ok%f   helpers selftest (versions, Sparkle, cask catalog)"; else print -P "%F{red}FAIL%f helpers selftest"; (( echecs++ )); fi
 
 print

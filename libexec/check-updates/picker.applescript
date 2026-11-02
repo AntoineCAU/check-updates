@@ -1,29 +1,37 @@
 -- Liste des mises à jour, dans une fenêtre dessinée ici (NSPanel) plutôt qu'une alerte :
 -- NSAlert réserve toujours la place d'une icône. Deux groupes :
---   automatiques : une case à cocher (pré-cochée), installées après « Update » ;
+--   automatiques : une case à cocher, installées après « Update » (pré-cochée, sauf version majeure) ;
 --   à faire soi-même : un bouton « Open » qui ouvre tout de suite les Réglages, l'app ou le site.
--- Arguments : titre, texte, bouton Update, bouton Later, bouton Done (s'il n'y a rien à cocher),
--- bouton Open, libellé « ouvert », titre et explication du groupe automatique, titre et
--- explication du groupe manuel, puis une ligne par mise à jour :
---   « A <tab> nom <tab> détail » ou « M <tab> nom <tab> détail <tab> commande ».
--- Affiche les numéros (à partir de 1) des lignes automatiques cochées si on valide.
+-- Chaque ligne a aussi un bouton « Ignore » (ignorer cette version).
+-- Arguments : titre, texte, boutons Update, Later, Done (s'il n'y a rien à cocher), Open,
+-- libellé « ouvert », Ignore, libellé « ignoré », titre et explication du groupe automatique,
+-- titre et explication du groupe manuel, puis une ligne par mise à jour :
+--   « A|B <tab> nom <tab> détail <tab> étiquette »  (A cochée, B non cochée)
+--   « M <tab> nom <tab> détail <tab> étiquette <tab> commande »
+-- Affiche une ligne par décision : « i N » pour chaque ligne ignorée, et si on valide,
+-- « u N » pour chaque case cochée (N = numéro de la ligne, à partir de 1).
 use AppleScript version "2.4"
 use framework "Foundation"
 use framework "AppKit"
 use scripting additions
 
-property largeur : 640
+property largeur : 700
 property marge : 20
-property colonneDetail : 250
-property largeurBouton : 76
+property colonneDetail : 220
+property largeurBouton : 70
+property largeurEtiquette : 64
 property hauteurLigne : 26
 property hauteurTitreGroupe : 30
 property ecartGroupes : 10
 property lignesVisibles : 14
-property premiereLigne : 12 -- index du premier argument « ligne »
+property premiereLigne : 14 -- index du premier argument « ligne »
 
-property commandes : {} -- commandes des boutons Open, par numéro (tag)
+property commandes : {} -- commande du bouton Open de chaque ligne (missing value sinon)
+property casesParLigne : {} -- case à cocher de chaque ligne (missing value sinon)
+property openParLigne : {} -- bouton Open de chaque ligne (missing value sinon)
+property ignorees : {}
 property libelleOuvert : ""
+property libelleIgnore : ""
 
 on run argv
 	set app_ to current application's NSApplication's sharedApplication()
@@ -35,56 +43,62 @@ on run argv
 	set AppleScript's text item delimiters to tab
 	repeat with i from premiereLigne to count of argv
 		set champs to text items of (item i of argv)
-		set ligne to {indice:(i - premiereLigne + 1), nom:(item 2 of champs), detail:"", commande:""}
+		set ligne to {indice:(i - premiereLigne + 1), sorte:(item 1 of champs), nom:(item 2 of champs), detail:"", etiquette:"", commande:""}
 		if (count of champs) > 2 then set detail of ligne to item 3 of champs
-		if item 1 of champs is "A" then
-			set end of automatiques to ligne
-		else
-			if (count of champs) > 3 then set commande of ligne to item 4 of champs
+		if (count of champs) > 3 then set etiquette of ligne to item 4 of champs
+		if (count of champs) > 4 then set commande of ligne to item 5 of champs
+		if sorte of ligne is "M" then
 			set end of manuelles to ligne
+		else
+			set end of automatiques to ligne
 		end if
+		set end of commandes to commande of ligne
+		set end of casesParLigne to missing value
+		set end of openParLigne to missing value
 	end repeat
 	set AppleScript's text item delimiters to ""
 	set libelleOuvert to item 7 of argv
+	set libelleIgnore to item 9 of argv
 
-	-- Liste des mises à jour (défile au-delà de lignesVisibles lignes)
+	-- Colonnes de droite à gauche : Open, Ignore, étiquette, puis le détail
 	set largeurListe to largeur - 2 * marge
+	set xOpen to largeurListe - largeurBouton
+	set xIgnore to xOpen - 6 - largeurBouton
+	set xEtiquette to xIgnore - 8 - largeurEtiquette
+	set largeurDetail to xEtiquette - 8 - colonneDetail
+
 	set hauteurListe to 0
 	if automatiques is not {} then set hauteurListe to hauteurListe + hauteurTitreGroupe + (count of automatiques) * hauteurLigne
 	if manuelles is not {} then set hauteurListe to hauteurListe + hauteurTitreGroupe + (count of manuelles) * hauteurLigne
 	if automatiques is not {} and manuelles is not {} then set hauteurListe to hauteurListe + ecartGroupes
 
 	set liste to current application's NSView's alloc()'s initWithFrame:{{0, 0}, {largeurListe, hauteurListe}}
-	set cases to {}
 	set y to hauteurListe
 	if automatiques is not {} then
-		set y to my titreGroupe(liste, y, largeurListe, item 8 of argv, item 9 of argv)
+		set y to my titreGroupe(liste, y, largeurListe, item 10 of argv, item 11 of argv)
 		repeat with l in automatiques
 			set y to y - hauteurLigne
 			set c to current application's NSButton's checkboxWithTitle:(nom of l) target:(missing value) action:(missing value)
 			c's setFrame:{{0, y}, {colonneDetail - 12, hauteurLigne}}
-			c's setState:1
+			if sorte of l is "A" then c's setState:1
 			liste's addSubview:c
-			my ajouterDetail(liste, y, detail of l, largeurListe - colonneDetail)
-			set end of cases to {c, indice of l}
+			set item (indice of l) of casesParLigne to c
+			my ajouterColonnes(liste, y, l, largeurDetail, xEtiquette, xIgnore, item 8 of argv)
 		end repeat
 		set y to y - ecartGroupes
 	end if
 	if manuelles is not {} then
-		set y to my titreGroupe(liste, y, largeurListe, item 10 of argv, item 11 of argv)
+		set y to my titreGroupe(liste, y, largeurListe, item 12 of argv, item 13 of argv)
 		repeat with l in manuelles
 			set y to y - hauteurLigne
 			set n to current application's NSTextField's labelWithString:(nom of l)
 			n's setLineBreakMode:4
 			n's setFrame:{{0, y + 4}, {colonneDetail - 12, hauteurLigne - 8}}
 			liste's addSubview:n
-			my ajouterDetail(liste, y, detail of l, largeurListe - colonneDetail - largeurBouton - 8)
-			set end of commandes to commande of l
-			set b to current application's NSButton's buttonWithTitle:(item 6 of argv) target:me action:"ouvrir:"
-			b's setTag:(count of commandes)
-			b's setControlSize:1 -- petit
-			b's setFrame:{{largeurListe - largeurBouton, y + 1}, {largeurBouton, hauteurLigne - 2}}
+			my ajouterColonnes(liste, y, l, largeurDetail, xEtiquette, xIgnore, item 8 of argv)
+			set b to my petitBouton(item 6 of argv, "ouvrir:", indice of l, xOpen, y)
 			liste's addSubview:b
+			set item (indice of l) of openParLigne to b
 		end repeat
 	end if
 	set hauteurVisible to hauteurListe
@@ -144,13 +158,20 @@ on run argv
 	set reponse to (app_'s runModalForWindow:fenetre) as integer
 	fenetre's orderOut:(missing value)
 
-	if reponse is not 1 then return "" -- 1 = Update
-	set choix to {}
-	repeat with c in cases
-		if (((item 1 of c)'s state()) as integer) is 1 then set end of choix to (item 2 of c) as text
+	set sortie to {}
+	repeat with k in ignorees
+		set end of sortie to "i " & k
 	end repeat
+	if reponse is 1 then -- 1 = Update
+		repeat with k from 1 to count of casesParLigne
+			set c to item k of casesParLigne
+			if c is not missing value then
+				if ((c's state()) as integer) is 1 and (c's isEnabled()) as boolean then set end of sortie to "u " & k
+			end if
+		end repeat
+	end if
 	set AppleScript's text item delimiters to linefeed
-	return choix as text
+	return sortie as text
 end run
 
 -- Bouton du bas : arrête la fenêtre avec son code (tag)
@@ -161,6 +182,14 @@ on bouton(titre, code, touche)
 	return b
 end bouton
 
+on petitBouton(titre, action, k, x, y)
+	set b to current application's NSButton's buttonWithTitle:titre target:me action:action
+	b's setTag:k
+	b's setControlSize:1 -- petit
+	b's setFrame:{{x, y + 1}, {largeurBouton, hauteurLigne - 2}}
+	return b
+end petitBouton
+
 on fermer:sender
 	current application's NSApplication's sharedApplication()'s stopModalWithCode:((sender's tag()) as integer)
 end fermer:
@@ -170,6 +199,46 @@ on ouvrir:sender
 	do shell script (item ((sender's tag()) as integer) of commandes)
 	sender's setTitle:libelleOuvert
 end ouvrir:
+
+-- Bouton Ignore : la ligne est grisée et sera ignorée, quel que soit le bouton du bas
+on ignorer:sender
+	set k to (sender's tag()) as integer
+	set end of ignorees to k
+	sender's setTitle:libelleIgnore
+	sender's setEnabled:false
+	set c to item k of casesParLigne
+	if c is not missing value then
+		c's setState:0
+		c's setEnabled:false
+	end if
+	set b to item k of openParLigne
+	if b is not missing value then b's setEnabled:false
+end ignorer:
+
+-- Détail (gris), étiquette (couleur) et bouton Ignore d'une ligne
+on ajouterColonnes(vue, y, l, largeurDetail, xEtiquette, xIgnore, titreIgnore)
+	if detail of l is not "" then
+		set d to current application's NSTextField's labelWithString:(detail of l)
+		d's setTextColor:(current application's NSColor's secondaryLabelColor())
+		d's setFont:(current application's NSFont's monospacedDigitSystemFontOfSize:12 weight:0)
+		d's setLineBreakMode:4 -- tronque la fin si c'est trop long
+		d's setFrame:{{colonneDetail, y + 4}, {largeurDetail, hauteurLigne - 8}}
+		vue's addSubview:d
+	end if
+	if etiquette of l is not "" then
+		set e to current application's NSTextField's labelWithString:(etiquette of l)
+		e's setFont:(current application's NSFont's boldSystemFontOfSize:11)
+		e's setAlignment:2 -- centré
+		if etiquette of l is "security" then
+			e's setTextColor:(current application's NSColor's systemRedColor())
+		else
+			e's setTextColor:(current application's NSColor's systemOrangeColor())
+		end if
+		e's setFrame:{{xEtiquette, y + 5}, {largeurEtiquette, hauteurLigne - 10}}
+		vue's addSubview:e
+	end if
+	vue's addSubview:(my petitBouton(titreIgnore, "ignorer:", indice of l, xIgnore, y))
+end ajouterColonnes
 
 -- Titre du groupe (gras) suivi de son explication (gris) ; renvoie la nouvelle position
 on titreGroupe(vue, y, largeurDispo, titre, explication)
@@ -186,14 +255,3 @@ on titreGroupe(vue, y, largeurDispo, titre, explication)
 	vue's addSubview:t
 	return y
 end titreGroupe
-
--- Versions (et précision éventuelle), en gris dans la colonne de droite
-on ajouterDetail(vue, y, detail, largeurDispo)
-	if detail is "" then return
-	set d to current application's NSTextField's labelWithString:detail
-	d's setTextColor:(current application's NSColor's secondaryLabelColor())
-	d's setFont:(current application's NSFont's monospacedDigitSystemFontOfSize:12 weight:0)
-	d's setLineBreakMode:4 -- tronque la fin si c'est trop long
-	d's setFrame:{{colonneDetail, y + 4}, {largeurDispo, hauteurLigne - 8}}
-	vue's addSubview:d
-end ajouterDetail

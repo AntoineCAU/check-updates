@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.1.5
+VERSION=0.2.0
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -20,6 +20,7 @@ LOG_DIR="$HOME/Library/Logs/check-updates"
 export CU_CACHE="$HOME/Library/Caches/check-updates"
 ACTIONS="$LOG_DIR/actions.tsv"     # libellé <tab> commande, issus de la dernière vérification
 SELECTION="$CU_CACHE/selection.tsv" # mises à jour cochées, exécutées par « __run »
+IGNORED="${CONFIG:h}/ignored"       # « nom version » des mises à jour ignorées, une par ligne
 
 # Réglages par défaut, surchargés par le fichier de config
 CHECK_HOUR=9 CHECK_MINUTE=30 TERMINAL_APP="" AI_COMMAND="" SKIP=()
@@ -73,31 +74,39 @@ ai_command() {
 #                  erreur, format de sortie inattendu…), plutôt que de se croire à jour
 # ---------------------------------------------------------------------------
 
-lancer_source() { # fichier → sortie dans $CU_CACHE/source.{out,err}, code 99 si l'outil est absent
-  ( source "$1"; src_available || exit 99; src_check ) >"$CU_CACHE/source.out" 2>"$CU_CACHE/source.err"
+lancer_source() { # fichier, dossier → $2/out, $2/err, $2/code (99 si l'outil est absent)
+  mkdir -p "$2"
+  ( source "$1"; src_available || exit 99; src_check ) >"$2/out" 2>"$2/err"
+  print -r -- $? > "$2/code"
 }
 
 nom_source() { print -r -- "${${1:t:r}#<->-}" }
 
-ajouter_section() { # fichier source, code de retour → n_section
-  local nom=$(nom_source "$1") code=$2 lignes notes n=0
-  lignes=$(grep -v "^#$T" "$CU_CACHE/source.out" | grep "$T")
-  notes=$(grep "^#$T" "$CU_CACHE/source.out" | cut -f2-)
-  [[ -n "$lignes" ]] && n=$(print -r -- "$lignes" | wc -l | tr -d ' ')
+ajouter_section() { # fichier source, code de retour, dossier de sortie → n_section
+  local nom=$(nom_source "$1") code=$2 d=$3 lignes notes ligne n
+  local -a gardees ignorees
+  lignes=$(grep -v "^#$T" "$d/out" | grep "$T")
+  notes=$(grep "^#$T" "$d/out" | cut -f2-)
+  for ligne in "${(@f)lignes}"; do
+    [[ -z "$ligne" ]] && continue
+    if est_ignoree "${ligne%%$T*}"; then ignorees+=("${ligne%%$T*}"); else gardees+=("$ligne"); fi
+  done
+  n=$#gardees
 
   print "## ${M[title_$nom]:-$nom} ($n)\n" >> "$RAPPORT"
   if (( n )); then
-    print -r -- "$lignes" | cut -f1 | sed 's/^/- /' >> "$RAPPORT"
-    print -r -- "$lignes" >> "$ACTIONS"
+    print -rl -- "${gardees[@]%%$T*}" | sed 's/^/- /' >> "$RAPPORT"
+    print -rl -- "${gardees[@]}" >> "$ACTIONS"
     resume+=("${M[title_$nom]:-$nom} $n")
     (( total += n ))
   elif (( code == 0 )); then
     print -r -- "${M[up_to_date]}" >> "$RAPPORT"
   fi
+  (( $#ignorees )) && print -rl -- "${ignorees[@]}" | sed "s/^/- ~~/; s/\$/~~ ${M[report_ignored]}/" >> "$RAPPORT"
   [[ -n "$notes" ]] && print -r -- "$notes" | sed 's/^/> /' >> "$RAPPORT"
   if (( code )); then
     erreurs+=("${M[title_$nom]:-$nom}")
-    { print -r -- $'\n'"**⚠ $(m check_failed $code)**"$'\n\n```'; tail -n 8 "$CU_CACHE/source.err"; print '```' } >> "$RAPPORT"
+    { print -r -- $'\n'"**⚠ $(m check_failed $code)**"$'\n\n```'; tail -n 8 "$d/err"; print '```' } >> "$RAPPORT"
   fi
   print >> "$RAPPORT"
   n_section=$n
@@ -124,14 +133,22 @@ verifier() { # [quiet]
   print -r -- "# ${M[report_title]} — $(date '+%A %d %B %Y %H:%M')"$'\n' > "$RAPPORT"
   [[ -t 1 ]] && print -P -- "%B${M[checking]}%b"
 
-  local f code nom
+  # Toutes les sources tournent en même temps ; les résultats s'affichent dans l'ordre
+  local -a fichiers pids
+  local f nom d i code
   for f in "$LIB"/sources/*.zsh(N); do
     nom=$(nom_source "$f")
     (( ${SKIP[(Ie)$nom]} )) && continue
+    lancer_source "$f" "$CU_CACHE/sources/$nom" &
+    fichiers+=("$f") pids+=($!)
+  done
+  for i in {1..$#fichiers}; do
+    f=$fichiers[$i] nom=$(nom_source "$f") d="$CU_CACHE/sources/$nom"
     progression "${M[title_$nom]:-$nom}"
-    lancer_source "$f"; code=$?
+    wait $pids[$i]
+    code=$(<"$d/code")
     n_section=0
-    (( code == 99 )) || ajouter_section "$f" $code
+    (( code == 99 )) || ajouter_section "$f" $code "$d"
     progression "${M[title_$nom]:-$nom}" $code $n_section
   done
 
@@ -148,6 +165,11 @@ verifier() { # [quiet]
   [[ "$1" == quiet ]] && return
 
   if (( total )); then
+    # Vérification programmée : la fenêtre ne s'ouvre que s'il y a du nouveau depuis la dernière liste
+    if [[ ! -t 1 ]] && ! nouveautes; then
+      notifier "$titre" "${M[nothing_new]}"
+      return
+    fi
     [[ -t 1 ]] && print -r -- "${M[opening_list]}"
     choisir
   elif (( $#erreurs )); then
@@ -183,18 +205,68 @@ decouper() {
   print -r -- "$nom$T$detail"
 }
 
+# Clé d'une mise à jour, « nom version-cible » : ignorer Docker 4.97.0 laisse revenir Docker 4.98
+cle() {
+  local champs=$(decouper "$1") detail
+  detail=${${champs#*$T}%% · *}
+  print -r -- "${champs%%$T*} ${detail##* }"
+}
+
+est_ignoree() { [[ -s "$IGNORED" ]] && grep -qxF -- "$(cle "$1")" "$IGNORED" }
+
+ignorer() {
+  local k=$(cle "$1")
+  mkdir -p "${IGNORED:h}"
+  grep -qxF -- "$k" "$IGNORED" 2>/dev/null || print -r -- "$k" >> "$IGNORED"
+  [[ -t 1 ]] && m now_ignored "$k"
+}
+
+cles_actions() { local l c; while IFS=$T read -r l c; do cle "$l"; done < "$ACTIONS" }
+
+nouveautes() { # vrai si une mise à jour n'était pas dans la dernière liste montrée
+  [[ -s "$CU_CACHE/last_shown" ]] || return 0
+  cles_actions | grep -qvxF -f "$CU_CACHE/last_shown"
+}
+
+majeure() { # libellé → vrai si la version majeure change (macOS : par rapport au système installé)
+  local l=$1 de vers champs
+  if [[ "$l" == *" → "* ]]; then
+    de=${${l%% → *}##* } vers=${${l#* → }%% *}
+  elif [[ "$l" == macOS\ * ]]; then
+    champs=$(decouper "$l")
+    de=$(sw_vers -productVersion) vers=${${champs#*$T}%% *}
+  else
+    return 1
+  fi
+  de=${${de#v}%%[^0-9]*} vers=${${vers#v}%%[^0-9]*}
+  [[ -n "$de" && -n "$vers" ]] && (( vers > de ))
+}
+
+# security : seulement quand l'éditeur l'écrit (« Background Security Improvement »…) ;
+# major : pour les mises à jour automatiques et macOS (les navigateurs changent de majeure chaque mois)
+etiquette() { # libellé, commande
+  if [[ "${1:l}" == *security* ]]; then print security
+  elif [[ "$2" != open\ * || "$1" == macOS\ * ]] && majeure "$1"; then print major
+  fi
+}
+
 choisir() {
   if [[ ! -s "$ACTIONS" ]]; then notifier check-updates "${M[nothing_pending]}"; return; fi
   local -a libelles commandes lignes ordre
-  local l c i choix texte erreurs_connues automatiques=0
+  local l c i k tag ligne choix texte erreurs_connues automatiques=0
   while IFS=$T read -r l c; do libelles+=("$l") commandes+=("$c"); done < "$ACTIONS"
-  # Les automatiques d'abord (cases à cocher), puis celles à faire soi-même (bouton Open,
-  # qui reçoit sa commande) ; ordre[] renvoie à libelles[]
+  # Les automatiques d'abord (case cochée, sauf version majeure), puis celles à faire
+  # soi-même (bouton Open, qui reçoit sa commande) ; ordre[] renvoie à libelles[]
   for i in {1..$#libelles}; do
-    [[ "$commandes[$i]" != open\ * ]] && { ordre+=($i) lignes+=("A$T$(decouper "$libelles[$i]")"); (( automatiques++ )) }
+    [[ "$commandes[$i]" == open\ * ]] && continue
+    tag=$(etiquette "$libelles[$i]" "$commandes[$i]")
+    [[ "$tag" == major ]] && k=B || k=A
+    ordre+=($i) lignes+=("$k$T$(decouper "$libelles[$i]")$T$tag")
+    (( automatiques++ ))
   done
   for i in {1..$#libelles}; do
-    [[ "$commandes[$i]" == open\ * ]] && { ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")$T$commandes[$i]") }
+    [[ "$commandes[$i]" == open\ * ]] || continue
+    ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")$T$(etiquette "$libelles[$i]" "$commandes[$i]")$T$commandes[$i]")
   done
 
   (( automatiques )) && texte=${M[pick_hint]} || texte=${M[pick_hint_manual]}
@@ -202,18 +274,27 @@ choisir() {
   [[ -n "$erreurs_connues" ]] && texte+=$'\n\n'"$(m sources_failed "${(pj:, :)${(f)erreurs_connues}}")"$'\n'"${M[doctor_hint]}"
 
   choix=$(osascript "$LIB/picker.applescript" "$(nb $#libelles available)" "$texte" \
-    "${M[update_btn]}" "${M[later]}" "${M[done_btn]}" "${M[open_btn]}" "${M[opened]}" \
+    "${M[update_btn]}" "${M[later]}" "${M[done_btn]}" "${M[open_btn]}" "${M[opened]}" "${M[ignore_btn]}" "${M[ignored_btn]}" \
     "${M[group_auto]}" "${M[group_auto_hint]}" "${M[group_manual]}" "${M[group_manual_hint]}" "${lignes[@]}" 2>/dev/null)
-  if [[ -z "$choix" ]]; then
+  cles_actions > "$CU_CACHE/last_shown"
+
+  # « u N » : à installer ; « i N » : à ignorer désormais
+  : > "$SELECTION"
+  for ligne in "${(@f)choix}"; do
+    i=${ligne#* }
+    case ${ligne%% *} in
+      u) print -r -- "$libelles[$ordre[$i]]$T$commandes[$ordre[$i]]" >> "$SELECTION" ;;
+      i) ignorer "$libelles[$ordre[$i]]" ;;
+    esac
+  done
+  if [[ "$choix" == *i\ * ]]; then # retire tout de suite les ignorées de la liste
+    while IFS=$T read -r l c; do est_ignoree "$l" || print -r -- "$l$T$c"; done < "$ACTIONS" > "$ACTIONS.tmp"
+    mv "$ACTIONS.tmp" "$ACTIONS"
+  fi
+  if [[ ! -s "$SELECTION" ]]; then
     (( automatiques )) && [[ -t 1 ]] && print -r -- "${M[nothing_selected]}"
     return
   fi
-
-  : > "$SELECTION"
-  for i in "${(@f)choix}"; do
-    print -r -- "$libelles[$ordre[$i]]$T$commandes[$ordre[$i]]" >> "$SELECTION"
-  done
-  [[ -s "$SELECTION" ]] || return
 
   # Lancé depuis un terminal : les mises à jour s'y déroulent ; sinon (launchd) on en ouvre un
   if [[ -t 1 ]]; then executer; return; fi
@@ -273,6 +354,23 @@ executer() { # [window] : lancé dans un terminal ouvert exprès
     esac
   fi
   [[ "$1" == window ]] && print -r -- $'\n'"${M[done]}"
+}
+
+lister_ignorees() {
+  if [[ -s "$IGNORED" ]]; then print -r -- "${M[ignored_title]}"; sed 's/^/  /' "$IGNORED"
+  else print -r -- "${M[ignored_none]}"
+  fi
+}
+
+designorer() { # nom | --all
+  case "$1" in
+    "") m unignore_usage >&2; return 2 ;;
+    --all) rm -f "$IGNORED"; print -r -- "${M[unignored_all]}" ;;
+    *) [[ -f "$IGNORED" ]] || return 0
+       awk -v n="$1" 'tolower(substr($0, 1, length(n) + 1)) != tolower(n " ")' "$IGNORED" > "$IGNORED.tmp"
+       mv "$IGNORED.tmp" "$IGNORED"
+       m unignored "$1" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -380,13 +478,13 @@ diagnostiquer() {
     nom=$(nom_source "$f")
     if (( ${SKIP[(Ie)$nom]} )); then etat off "${M[title_$nom]:-$nom} — ${M[doctor_skipped]}"; continue; fi
     debut=$EPOCHREALTIME
-    lancer_source "$f"; code=$?
-    n=$(grep -v "^#$T" "$CU_CACHE/source.out" | grep -c "$T")
+    lancer_source "$f" "$CU_CACHE/sources/$nom"; code=$(<"$CU_CACHE/sources/$nom/code")
+    n=$(grep -v "^#$T" "$CU_CACHE/sources/$nom/out" | grep -c "$T")
     case $code in
       99) etat off "${M[title_$nom]:-$nom} — ${M[doctor_absent]}" ;;
       0) etat ok "${M[title_$nom]:-$nom} — $(nb $n count) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)" ;;
       *) etat ko "${M[title_$nom]:-$nom} — code $code"
-         tail -n 4 "$CU_CACHE/source.err" | sed 's/^/      /' ;;
+         tail -n 4 "$CU_CACHE/sources/$nom/err" | sed 's/^/      /' ;;
     esac
   done
 
@@ -409,6 +507,9 @@ diagnostiquer() {
   return $ko
 }
 
+# Chargé avec « source » (tests) : seulement les fonctions
+[[ "$ZSH_EVAL_CONTEXT" == *:file* ]] && return 0
+
 case "$1" in
   "") verifier ;;
   --quiet) verifier quiet ;;
@@ -416,6 +517,8 @@ case "$1" in
   __run) executer window ;;
   doctor) diagnostiquer ;;
   schedule) programmer "$2" "$3" ;;
+  ignored) lister_ignorees ;;
+  unignore) designorer "$2" ;;
   install) programmer on ;;    # ancien nom (0.1.x)
   uninstall) programmer off ;; # ancien nom (0.1.x)
   -v|--version) print -r -- "check-updates $VERSION" ;;

@@ -1,9 +1,9 @@
-# Formule à copier dans le dépôt du tap (github.com/AntoineCAU/homebrew-tap, dossier Formula/).
-# À chaque version : mettre à jour url et sha256 (shasum -a 256 sur l'archive du tag).
+# Modèle de la formule du tap (github.com/AntoineCAU/homebrew-tap) : son action GitHub le
+# recopie à chaque nouveau tag, en remplaçant url et sha256. Ne modifier que ce fichier.
 class CheckUpdates < Formula
   desc "Find what is out of date on your Mac and update it from a checklist"
   homepage "https://github.com/AntoineCAU/check-updates"
-  url "https://github.com/AntoineCAU/check-updates/archive/refs/tags/v0.1.5.tar.gz"
+  url "https://github.com/AntoineCAU/check-updates/archive/refs/tags/v0.2.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 

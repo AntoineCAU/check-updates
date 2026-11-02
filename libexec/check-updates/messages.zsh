@@ -4,6 +4,7 @@ M=(
 
   report_title "Available updates"
   up_to_date "_Up to date._"
+  report_ignored "(ignored)"
   up_to_date_short "up to date"
   check_failed_short "check failed"
   checking "Checking for updates…"
@@ -23,6 +24,13 @@ M=(
   open_report "Open Report"
   opening_list "Opening the list…"
   nothing_selected "Nothing selected. Reopen the list any time: check-updates --list"
+  nothing_new "Nothing new since the last list. See it again: check-updates --list"
+  now_ignored "Ignored: %s (undo: check-updates unignore <name>)\n"
+  ignored_title "Ignored updates (they come back when a newer version is out):"
+  ignored_none "No ignored updates."
+  unignored "No longer ignored: %s\n"
+  unignored_all "No more ignored updates."
+  unignore_usage "Usage: check-updates unignore <name> | --all\n"
   close "Close"
   pick_hint "Select the updates to install."
   pick_hint_manual "Open each one to update it."
@@ -30,6 +38,8 @@ M=(
   done_btn "Done"
   open_btn "Open"
   opened "Opened"
+  ignore_btn "Ignore"
+  ignored_btn "Ignored"
   nothing_pending "No pending updates."
   group_auto "Automatic"
   group_auto_hint "installed in a terminal"
@@ -108,6 +118,8 @@ Usage:
   check-updates schedule on [HH:MM]  check every day (default 9:30)
   check-updates schedule off         stop the daily check
   check-updates schedule             show whether the daily check is on
+  check-updates ignored              list the updates you chose to ignore
+  check-updates unignore <name>      show an ignored update again (--all for every one)
 
 Reports: ~/Library/Logs/check-updates/latest.md
 Settings: ~/.config/check-updates/config"
