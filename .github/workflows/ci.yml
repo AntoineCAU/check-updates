@@ -26,7 +26,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-latest]
+        # Un seul Mac à chaque push (moins d'exposition à la saturation des Mac de GitHub),
+        # les deux versions de macOS chaque lundi et à la demande
+        os: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["macos-15", "macos-latest"]') || fromJSON('["macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
