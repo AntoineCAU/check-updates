@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.1.4
+VERSION=0.1.5
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
