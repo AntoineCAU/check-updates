@@ -52,6 +52,16 @@ The daily check is off until you turn it on.
 
 Reports are written to `~/Library/Logs/check-updates/latest.md`, settings live in `~/.config/check-updates/config` (terminal, AI CLI, sources to skip).
 
+## AI diagnosis and privacy
+
+When an update fails, **Diagnose with…** hands the error to an AI CLI installed on your Mac (Claude Code, Codex, Gemini, or any command set with `AI_COMMAND`). Before anything is sent:
+
+- only the output of the failed steps goes out, not the full log;
+- your home folder, user name and machine name are masked, and so are known secret formats (credentials in URLs, bearer tokens, GitHub/npm/OpenAI/Anthropic/AWS/Slack/Stripe keys, `password=`, `token=`…);
+- a window says what will be sent, with **Show What's Sent** to read it first.
+
+Masking cannot catch every possible secret. Set `AI_COMMAND="none"` in `~/.config/check-updates/config` to remove the button.
+
 ## Staying reliable
 
 Each parser rejects output it does not recognise: a source whose format changed is reported as **failed** instead of silently showing “up to date”.

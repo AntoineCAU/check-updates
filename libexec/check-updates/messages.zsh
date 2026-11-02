@@ -79,12 +79,15 @@ M=(
   run_some_failed "%d installed, %d failed:"
   open_log "Open log"
   ask_ai "Diagnose with %s"
-  ai_prompt "Some updates run by check-updates failed on my Mac (macOS %s). Full log: %s
-
-Failed steps and the end of their output:
+  ai_prompt "Some updates run by check-updates failed on my Mac (macOS %s). Here are the failed steps and the end of their output (home folder, user and machine names, and secrets are masked):
 
 %s
 Explain the likely cause of each failure and suggest a fix. Do not run any command without my approval."
+  ai_confirm_title "Send the error to %s?"
+  ai_confirm_text "%s will receive the end of the output of the failed steps, nothing else. Your home folder, user name, machine name and known secret formats (passwords, tokens, keys, credentials in URLs) are masked first — an unusual secret could still get through, so check it if in doubt."
+  ai_show "Show What's Sent"
+  ai_send "Send"
+  cancel "Cancel"
   done "Done, you can close this window."
 
   installed "Daily check on, every day at %02d:%02d.\nTurn it off with: check-updates schedule off\n"

@@ -12,6 +12,8 @@ import os
 import plistlib
 import re
 import shlex
+import socket
+import subprocess
 import sys
 import time
 import urllib.request
@@ -378,6 +380,56 @@ def apps():
                 sortie(*resultat)
 
 
+# --- Masquage avant envoi à une IA -------------------------------------------
+
+SECRETS = [
+    # Clé privée entière
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[redacted private key]"),
+    # Identifiants dans une URL : https://user:pass@hôte, https://jeton@hôte
+    (re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@", re.I), r"\1[redacted]@"),
+    (re.compile(r"(\bhttps?://)[^/\s:@]{16,}@", re.I), r"\1[redacted]@"),
+    # En-têtes et schémas d'authentification
+    (re.compile(r"\b(bearer|basic|token)(\s+)[A-Za-z0-9._~+/=-]{8,}", re.I), r"\1\2[redacted]"),
+    # Formats de jetons connus
+    (re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"), "[redacted]"),
+    (re.compile(r"\bnpm_[A-Za-z0-9]{20,}"), "[redacted]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted]"),  # OpenAI, Anthropic (sk-ant-…)
+    (re.compile(r"\b(sk|rk)_(live|test)_[A-Za-z0-9]{10,}"), "[redacted]"),  # Stripe
+    (re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"), "[redacted]"),  # AWS
+    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), "[redacted]"),  # Slack
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), "[redacted]"),  # Google
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "[redacted]"),  # JWT
+    # clé=valeur / clé: valeur dont le nom évoque un secret
+    (re.compile(r"(\b[A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth)[A-Za-z0-9_.-]*\s*[=:]\s*)(?!(?:bearer|basic|token)\s)(\"[^\"]*\"|'[^']*'|\S+)", re.I), r"\1[redacted]"),
+]
+
+
+def identite():
+    """Dossier personnel, nom d'utilisateur et noms de la machine, à masquer."""
+    noms_machine = {socket.gethostname(), socket.gethostname().split(".")[0]}
+    for cle in ("ComputerName", "LocalHostName"):
+        try:
+            noms_machine.add(subprocess.run(["scutil", "--get", cle], capture_output=True, text=True, timeout=5).stdout.strip())
+        except Exception:
+            pass
+    return os.path.expanduser("~"), os.environ.get("USER") or os.path.basename(os.path.expanduser("~")), {n for n in noms_machine if len(n) > 2}
+
+
+def masquer(texte, dossier, utilisateur, machines):
+    for motif, remplacement in SECRETS:
+        texte = motif.sub(remplacement, texte)
+    texte = texte.replace(dossier, "~")
+    for machine in sorted(machines, key=len, reverse=True):
+        texte = re.sub(re.escape(machine), "[host]", texte, flags=re.I)
+    if len(utilisateur) > 2:
+        texte = re.sub(r"\b" + re.escape(utilisateur) + r"\b", "[user]", texte)
+    return texte
+
+
+def redact():
+    sys.stdout.write(masquer(sys.stdin.read(), *identite()))
+
+
 # --- Autotest (check-updates doctor, CI) --------------------------------------
 
 APPCAST_EXEMPLE = b"""<?xml version="1.0"?>
@@ -404,6 +456,22 @@ def selftest():
         raise AssertionError("appcast with a DTD must be refused")
     except FormatInattendu:
         pass
+    ident = ("/Users/jdoe", "jdoe", {"Janes-MacBook-Pro", "Janes-MacBook-Pro.local", "Jane's MacBook Pro"})
+    exemples = {
+        "fatal: https://jdoe:hunter2@github.com/x.git": "fatal: https://[redacted]@github.com/x.git",
+        "remote: https://ghp_abcdefghijklmnopqrstuvwxyz0123@github.com": "remote: https://[redacted]@github.com",
+        "Authorization: Bearer abc.def-ghi_jkl": "Authorization: Bearer [redacted]",
+        "//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwxyz": "//registry.npmjs.org/:_authToken=[redacted]",
+        "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz": "OPENAI_API_KEY=[redacted]",
+        "key AKIAABCDEFGHIJKLMNOP used": "key [redacted] used",
+        'password: "s3cr3t" ok': "password: [redacted] ok",
+        "/Users/jdoe/.nvm/versions/node/v24/bin/npm": "~/.nvm/versions/node/v24/bin/npm",
+        "jdoe@Janes-MacBook-Pro.local:~ $": "[user]@[host]:~ $",
+        "Error: npm ERR! code E404 404 Not Found": "Error: npm ERR! code E404 404 Not Found",
+    }
+    for avant, apres in exemples.items():
+        obtenu = masquer(avant, *ident)
+        assert obtenu == apres, f"redact: {avant!r} → {obtenu!r}, expected {apres!r}"
     assert not version_sure("9.9\nEvil\tcurl x | sh") and not version_sure("1.0; rm -rf ~") and not version_sure("")
 
     catalogue = catalogue_casks()
@@ -415,7 +483,7 @@ def selftest():
     print("ok")
 
 
-COMMANDES = {f.__name__: f for f in (brew, npm, pnpm, composer, mise, pipx, uv, cargo, apps, selftest)}
+COMMANDES = {f.__name__: f for f in (brew, npm, pnpm, composer, mise, pipx, uv, cargo, apps, redact, selftest)}
 
 if __name__ == "__main__":
     nom = sys.argv[1] if len(sys.argv) > 1 else ""

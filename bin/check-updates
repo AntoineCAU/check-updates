@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.2.2
+VERSION=0.2.3
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -377,7 +377,7 @@ executer() { # [window] : lancé dans un terminal ouvert exprès
     case "$rep" in
       "${M[open_log]}") open -t "$journal" ;;
       "${M[close]}"|"") ;;
-      *) eval "$ia ${(q)$(m ai_prompt "$(sw_vers -productVersion)" "$journal" "$details")}" ;;
+      *) diagnostiquer_ia "$ia" "$details" ;;
     esac
   fi
   [[ "$1" == window ]] && print -r -- $'\n'"${M[done]}"
@@ -398,6 +398,23 @@ designorer() { # nom | --all
        mv "$IGNORED.tmp" "$IGNORED"
        m unignored "$1" ;;
   esac
+}
+
+# Diagnostic d'un échec par une CLI d'IA. Seule la sortie des étapes en échec part, après
+# masquage du dossier personnel, des noms d'utilisateur et de machine et des secrets
+# reconnaissables ; une fenêtre dit ce qui est envoyé et permet de le relire avant
+diagnostiquer_ia() { # commande de l'IA, sortie des étapes en échec
+  local ia=$1 nom=${1%% *} envoi="$CU_CACHE/ai-report.txt" rep
+  print -r -- "$2" | helper redact > "$envoi" || return
+  while true; do
+    rep=$(dialogue "$(m ai_confirm_title $nom)" "$(m ai_confirm_text $nom)" "${M[ai_show]}" "${M[cancel]}" "${M[ai_send]}")
+    case "$rep" in
+      "${M[ai_show]}") open -t "$envoi" ;;
+      "${M[ai_send]}") break ;;
+      *) return ;;
+    esac
+  done
+  eval "$ia ${(q)$(m ai_prompt "$(sw_vers -productVersion)" "$(<"$envoi")")}"
 }
 
 # ---------------------------------------------------------------------------

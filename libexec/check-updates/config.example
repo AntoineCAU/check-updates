@@ -5,7 +5,9 @@
 # TERMINAL_APP=Terminal
 
 # AI CLI used to diagnose failed updates (default: first found among claude, codex, gemini).
-# Any command that takes the prompt as its last argument works; "none" disables the button.
+# Any command that takes the prompt as its last argument works; "none" removes the button.
+# Only the output of the failed steps is sent, with personal data and known secrets masked,
+# and you are asked first.
 # AI_COMMAND="codex"
 
 # Sources to skip: macos brew mas apps node npm pnpm pipx uv cargo rustup gem mise composer omz
