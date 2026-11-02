@@ -8,7 +8,12 @@ Finds everything that is out of date on a Mac — macOS, apps, command-line tool
 brew install antoinecau/tap/check-updates
 ```
 
-Run `check-updates` whenever you want: a window shows what is out of date. **Show** opens a checklist; ticked updates run in a terminal window so you can follow them (and type your password when needed). At the end you get a summary of what failed, with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it.
+Run `check-updates` whenever you want. It shows its progress, then opens a checklist in two groups:
+
+- **Automatic** (ticked by default): installed right away in your terminal, so you can follow them and type your password when needed;
+- **Up to you**: macOS and apps that update themselves — ticking one opens System Settings, the app or its website.
+
+If an update fails, you get a summary with buttons to open the log or ask an AI CLI (Claude Code, Codex, Gemini…) to diagnose it.
 
 ## What it checks
 

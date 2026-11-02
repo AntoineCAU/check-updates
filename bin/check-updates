@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.1.2
+VERSION=0.1.3
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -31,7 +31,8 @@ typeset -A M
 source "$LIB/messages.zsh"
 export LC_TIME="${M[locale]}"
 
-m() { printf -- "${M[$1]}" "${@:2}" } # message traduit, avec arguments printf
+m() { printf -- "${M[$1]}" "${@:2}" } # message, avec arguments printf
+nb() { (( $1 == 1 )) && m ${2}_one || m ${2}_many $1 } # « 1 update » / « 7 updates »
 helper() { /usr/bin/python3 -I "$LIB/helpers.py" "$@" }
 
 # Fenêtre à boutons ; affiche le bouton cliqué (rien si elle reste sans réponse 4 h,
@@ -78,7 +79,7 @@ lancer_source() { # fichier → sortie dans $CU_CACHE/source.{out,err}, code 99 
 
 nom_source() { print -r -- "${${1:t:r}#<->-}" }
 
-ajouter_section() { # fichier source, code de retour
+ajouter_section() { # fichier source, code de retour → n_section
   local nom=$(nom_source "$1") code=$2 lignes notes n=0
   lignes=$(grep -v "^#$T" "$CU_CACHE/source.out" | grep "$T")
   notes=$(grep "^#$T" "$CU_CACHE/source.out" | cut -f2-)
@@ -99,6 +100,21 @@ ajouter_section() { # fichier source, code de retour
     { print -r -- $'\n'"**⚠ $(m check_failed $code)**"$'\n\n```'; tail -n 8 "$CU_CACHE/source.err"; print '```' } >> "$RAPPORT"
   fi
   print >> "$RAPPORT"
+  n_section=$n
+}
+
+# Progression dans le terminal (rien sous launchd)
+progression() { # nom de la source, puis code et nombre de mises à jour une fois vérifiée
+  [[ -t 1 ]] || return
+  local nom="${(r:16:)1}"
+  if (( $# == 1 )); then print -n -P -- "  %F{8}…%f ${nom//\%/%%}"; return; fi
+  print -n $'\r\e[K'
+  case $2 in
+    99) ;;
+    0) (( $3 )) && print -P -- "  %F{blue}●%f ${nom//\%/%%} $(nb $3 count)" \
+                || print -P -- "  %F{green}✔%f ${nom//\%/%%} %F{8}${M[up_to_date_short]}%f" ;;
+    *) print -P -- "  %F{red}✘%f ${nom//\%/%%} %F{red}${M[check_failed_short]}%f" ;;
+  esac
 }
 
 verifier() { # [quiet]
@@ -106,38 +122,39 @@ verifier() { # [quiet]
   total=0 resume=() erreurs=()
   : > "$ACTIONS"
   print -r -- "# ${M[report_title]} — $(date '+%A %d %B %Y %H:%M')"$'\n' > "$RAPPORT"
+  [[ -t 1 ]] && print -P -- "%B${M[checking]}%b"
 
-  local f code
+  local f code nom
   for f in "$LIB"/sources/*.zsh(N); do
-    (( ${SKIP[(Ie)$(nom_source "$f")]} )) && continue
+    nom=$(nom_source "$f")
+    (( ${SKIP[(Ie)$nom]} )) && continue
+    progression "${M[title_$nom]:-$nom}"
     lancer_source "$f"; code=$?
+    n_section=0
     (( code == 99 )) || ajouter_section "$f" $code
+    progression "${M[title_$nom]:-$nom}" $code $n_section
   done
 
   ln -sf "$RAPPORT" "$LOG_DIR/latest.md"
+  print -l -- "${erreurs[@]}" > "$CU_CACHE/last_errors"
   find "$LOG_DIR" \( -name '20*.md' -o -name 'run-*.log' \) -mtime +30 -delete
 
-  local titre msg manuelles
-  if (( total )); then
-    manuelles=$(cut -f2 "$ACTIONS" | grep -c '^open ')
-    titre=$(m n_updates $total)
-    msg="$(m auto_manual_count $(( total - manuelles )) $manuelles)"$'\n'"${(j:, :)resume}"
-  else titre=${M[all_good_title]} msg=${M[all_good]}
+  local titre
+  if (( total )); then titre=$(nb $total available)
+  else titre=${M[all_good_title]}
   fi
-  (( $#erreurs )) && msg+=$'\n\n'"$(m sources_failed "${(j:, :)erreurs}")"$'\n'"${M[doctor_hint]}"
-  print -r -- "$titre — ${msg//$'\n'/ }"
+  [[ -t 1 ]] && print
+  print -r -- "$titre${erreurs:+ — $(m sources_failed "${(j:, :)erreurs}")}"
   [[ "$1" == quiet ]] && return
 
-  local rep
   if (( total )); then
-    rep=$(dialogue "$titre" "$msg" "${M[later]}" "${M[report]}" "${M[show]}")
-    [[ "$rep" == "${M[report]}" ]] && open -t "$LOG_DIR/latest.md"
-    [[ "$rep" == "${M[show]}" ]] && choisir
+    [[ -t 1 ]] && print -r -- "${M[opening_list]}"
+    choisir
   elif (( $#erreurs )); then
-    rep=$(dialogue "$titre" "$msg" "${M[close]}" "${M[report]}")
-    [[ "$rep" == "${M[report]}" ]] && open -t "$LOG_DIR/latest.md"
+    [[ $(dialogue "${M[check_incomplete]}" "$(m sources_failed "${(j:, :)erreurs}")"$'\n'"${M[doctor_hint]}" "${M[open_report]}" "${M[ok]}") == "${M[open_report]}" ]] \
+      && open -t "$LOG_DIR/latest.md"
   else
-    notifier "$titre" "$msg"
+    notifier "$titre" "${M[all_good]}"
   fi
 }
 
@@ -149,24 +166,49 @@ verifier() { # [quiet]
 # dans la fenêtre et simplement ouverte, sans passer par le terminal.
 # ---------------------------------------------------------------------------
 
+# Libellé d'une source → « nom<tab>détail » pour la liste : versions à droite, et les
+# explications génériques (« opens the app… ») retirées, le titre du groupe les donne déjà
+decouper() {
+  local l=$1 note="" gauche nom detail=""
+  if [[ "$l" == *" ("*")" ]]; then note=${${l##* \(}%\)} l=${l% \(*}; fi
+  [[ "$note" == (${M[open_app]}|${M[open_site]}|${M[settings]}|cask) ]] && note=""
+  if [[ "$l" == *" → "* ]]; then
+    gauche=${l%% → *} nom=${gauche% *} detail="${gauche##* } → ${l#* → }"
+  elif [[ "$l" == *" "* && ${l##* } == [0-9v]* ]]; then
+    nom=${l% *} detail=${l##* }
+  else
+    nom=$l
+  fi
+  [[ -n "$note" ]] && detail+="${detail:+ · }$note"
+  print -r -- "$nom$T$detail"
+}
+
 choisir() {
   if [[ ! -s "$ACTIONS" ]]; then notifier check-updates "${M[nothing_pending]}"; return; fi
-  local -a libelles commandes automatiques manuelles
-  local l c i choix
-  while IFS=$T read -r l c; do
-    libelles+=("$l") commandes+=("$c")
-    [[ "$c" == open\ * ]] && manuelles+=("$l") || automatiques+=("$l")
-  done < "$ACTIONS"
+  local -a libelles commandes lignes ordre
+  local l c i choix texte erreurs_connues
+  while IFS=$T read -r l c; do libelles+=("$l") commandes+=("$c"); done < "$ACTIONS"
+  # Les automatiques d'abord, puis celles à faire soi-même ; ordre[] renvoie à libelles[]
+  for i in {1..$#libelles}; do [[ "$commandes[$i]" != open\ * ]] && { ordre+=($i) lignes+=("A$T$(decouper "$libelles[$i]")") }; done
+  for i in {1..$#libelles}; do [[ "$commandes[$i]" == open\ * ]] && { ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")") }; done
 
-  choix=$(osascript "$LIB/picker.applescript" "${M[pick_title]}" "${M[pick_hint]}" "${M[update_btn]}" "${M[cancel]}" \
-    "${M[group_auto]}" "${M[group_manual]}" "${automatiques[@]}" --manual-- "${manuelles[@]}" 2>/dev/null)
-  [[ -z "$choix" ]] && return
+  texte=${M[pick_hint]}
+  erreurs_connues=$(<"$CU_CACHE/last_errors" 2>/dev/null)
+  [[ -n "$erreurs_connues" ]] && texte+=$'\n\n'"$(m sources_failed "${(pj:, :)${(f)erreurs_connues}}")"$'\n'"${M[doctor_hint]}"
+
+  choix=$(osascript "$LIB/picker.applescript" "$(nb $#libelles available)" "$texte" "${M[update_btn]}" "${M[later]}" \
+    "${M[group_auto]}" "${M[group_auto_hint]}" "${M[group_manual]}" "${M[group_manual_hint]}" "${lignes[@]}" 2>/dev/null)
+  if [[ -z "$choix" ]]; then
+    [[ -t 1 ]] && print -r -- "${M[nothing_selected]}"
+    return
+  fi
 
   local -A ouvertes
   : > "$SELECTION"
-  for l in "${(@f)choix}"; do
-    i=${libelles[(ie)$l]} c=$commandes[$i]
+  for i in "${(@f)choix}"; do
+    l=$libelles[$ordre[$i]] c=$commandes[$ordre[$i]]
     if [[ "$c" == open\ * ]]; then
+      [[ -t 1 ]] && print -r -- "→ ${${(f)$(decouper "$l")}%%$T*}"
       [[ -z "${ouvertes[$c]}" ]] && eval "$c"
       ouvertes[$c]=1
     else
@@ -175,6 +217,8 @@ choisir() {
   done
   [[ -s "$SELECTION" ]] || return
 
+  # Lancé depuis un terminal : les mises à jour s'y déroulent ; sinon (launchd) on en ouvre un
+  if [[ -t 1 ]]; then executer; return; fi
   local script="$CU_CACHE/check-updates.command" app=$TERMINAL_APP
   print -r -- "#!/bin/zsh"$'\n'"exec ${(q)SELF} __run" > "$script"
   chmod +x "$script"
@@ -182,7 +226,7 @@ choisir() {
   open -a "$app" "$script"
 }
 
-executer() {
+executer() { # [window] : lancé dans un terminal ouvert exprès
   [[ -s "$SELECTION" ]] || return
   export ZSH="${ZSH:-$HOME/.oh-my-zsh}" NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
@@ -230,7 +274,7 @@ executer() {
       *) eval "$ia ${(q)$(m ai_prompt "$(sw_vers -productVersion)" "$journal" "$details")}" ;;
     esac
   fi
-  print -r -- $'\n'"${M[done]}"
+  [[ "$1" == window ]] && print -r -- $'\n'"${M[done]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -342,7 +386,7 @@ diagnostiquer() {
     n=$(grep -v "^#$T" "$CU_CACHE/source.out" | grep -c "$T")
     case $code in
       99) etat off "${M[title_$nom]:-$nom} — ${M[doctor_absent]}" ;;
-      0) etat ok "${M[title_$nom]:-$nom} — $(m doctor_found $n) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)" ;;
+      0) etat ok "${M[title_$nom]:-$nom} — $(nb $n count) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)" ;;
       *) etat ko "${M[title_$nom]:-$nom} — code $code"
          tail -n 4 "$CU_CACHE/source.err" | sed 's/^/      /' ;;
     esac
@@ -371,7 +415,7 @@ case "$1" in
   "") verifier ;;
   --quiet) verifier quiet ;;
   --list) choisir ;;
-  __run) executer ;;
+  __run) executer window ;;
   doctor) diagnostiquer ;;
   schedule) programmer "$2" "$3" ;;
   install) programmer on ;;    # ancien nom (0.1.x)
