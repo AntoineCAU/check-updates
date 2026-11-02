@@ -3,11 +3,11 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.2.0
+VERSION=0.2.1
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
-zmodload zsh/datetime
+zmodload zsh/datetime zsh/zselect
 
 typeset -U path
 path=(${PNPM_HOME:-$HOME/Library/pnpm} /opt/homebrew/bin /opt/homebrew/sbin /usr/local/bin $HOME/.local/bin $HOME/.cargo/bin $path /usr/bin /bin /usr/sbin /sbin)
@@ -76,13 +76,14 @@ ai_command() {
 
 lancer_source() { # fichier, dossier → $2/out, $2/err, $2/code (99 si l'outil est absent)
   mkdir -p "$2"
+  rm -f "$2/code"
   ( source "$1"; src_available || exit 99; src_check ) >"$2/out" 2>"$2/err"
-  print -r -- $? > "$2/code"
+  print -r -- $? > "$2/code.tmp" && mv "$2/code.tmp" "$2/code" # code présent = source terminée
 }
 
 nom_source() { print -r -- "${${1:t:r}#<->-}" }
 
-ajouter_section() { # fichier source, code de retour, dossier de sortie → n_section
+ajouter_section() { # fichier source, code de retour, dossier → $d/section.md, $d/actions.tsv, $d/n
   local nom=$(nom_source "$1") code=$2 d=$3 lignes notes ligne n
   local -a gardees ignorees
   lignes=$(grep -v "^#$T" "$d/out" | grep "$T")
@@ -92,31 +93,30 @@ ajouter_section() { # fichier source, code de retour, dossier de sortie → n_se
     if est_ignoree "${ligne%%$T*}"; then ignorees+=("${ligne%%$T*}"); else gardees+=("$ligne"); fi
   done
   n=$#gardees
-
-  print "## ${M[title_$nom]:-$nom} ($n)\n" >> "$RAPPORT"
-  if (( n )); then
-    print -rl -- "${gardees[@]%%$T*}" | sed 's/^/- /' >> "$RAPPORT"
-    print -rl -- "${gardees[@]}" >> "$ACTIONS"
-    resume+=("${M[title_$nom]:-$nom} $n")
-    (( total += n ))
-  elif (( code == 0 )); then
-    print -r -- "${M[up_to_date]}" >> "$RAPPORT"
-  fi
-  (( $#ignorees )) && print -rl -- "${ignorees[@]}" | sed "s/^/- ~~/; s/\$/~~ ${M[report_ignored]}/" >> "$RAPPORT"
-  [[ -n "$notes" ]] && print -r -- "$notes" | sed 's/^/> /' >> "$RAPPORT"
-  if (( code )); then
-    erreurs+=("${M[title_$nom]:-$nom}")
-    { print -r -- $'\n'"**⚠ $(m check_failed $code)**"$'\n\n```'; tail -n 8 "$d/err"; print '```' } >> "$RAPPORT"
-  fi
-  print >> "$RAPPORT"
-  n_section=$n
+  print -r -- $n > "$d/n"
+  : > "$d/actions.tsv"
+  {
+    print "## ${M[title_$nom]:-$nom} ($n)\n"
+    if (( n )); then
+      print -rl -- "${gardees[@]%%$T*}" | sed 's/^/- /'
+      print -rl -- "${gardees[@]}" > "$d/actions.tsv"
+    elif (( code == 0 )); then
+      print -r -- "${M[up_to_date]}"
+    fi
+    (( $#ignorees )) && print -rl -- "${ignorees[@]}" | sed "s/^/- ~~/; s/\$/~~ ${M[report_ignored]}/"
+    [[ -n "$notes" ]] && print -r -- "$notes" | sed 's/^/> /'
+    if (( code )); then
+      print -r -- $'\n'"**⚠ $(m check_failed $code)**"$'\n\n```'; tail -n 8 "$d/err"; print '```'
+    fi
+    print
+  } > "$d/section.md"
 }
 
-# Progression dans le terminal (rien sous launchd)
-progression() { # nom de la source, puis code et nombre de mises à jour une fois vérifiée
+# Progression dans le terminal (rien sous launchd) : une ligne par source dès qu'elle a fini,
+# et en dessous une ligne animée avec celles qui tournent encore
+progression() { # nom, code, nombre de mises à jour
   [[ -t 1 ]] || return
   local nom="${(r:16:)1}"
-  if (( $# == 1 )); then print -n -P -- "  %F{8}…%f ${nom//\%/%%}"; return; fi
   print -n $'\r\e[K'
   case $2 in
     99) ;;
@@ -126,6 +126,11 @@ progression() { # nom de la source, puis code et nombre de mises à jour une foi
   esac
 }
 
+attente() { # image de l'animation, noms des sources en cours
+  [[ -t 1 ]] || return
+  print -n -P -- $'\r\e[K'"  %F{8}$1 ${${(j:, :)@[2,-1]}//\%/%%}%f"
+}
+
 verifier() { # [quiet]
   RAPPORT="$LOG_DIR/$(date +%F).md"
   total=0 resume=() erreurs=()
@@ -133,23 +138,44 @@ verifier() { # [quiet]
   print -r -- "# ${M[report_title]} — $(date '+%A %d %B %Y %H:%M')"$'\n' > "$RAPPORT"
   [[ -t 1 ]] && print -P -- "%B${M[checking]}%b"
 
-  # Toutes les sources tournent en même temps ; les résultats s'affichent dans l'ordre
-  local -a fichiers pids
-  local f nom d i code
+  # Toutes les sources tournent en même temps ; chacune s'affiche dès qu'elle a fini
+  local -a fichiers noms en_cours images=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  local -A fini
+  local f nom d i code tour=0
   for f in "$LIB"/sources/*.zsh(N); do
     nom=$(nom_source "$f")
     (( ${SKIP[(Ie)$nom]} )) && continue
     lancer_source "$f" "$CU_CACHE/sources/$nom" &
-    fichiers+=("$f") pids+=($!)
+    fichiers+=("$f") noms+=("$nom")
   done
+  while (( $#fini < $#fichiers )); do
+    en_cours=()
+    for i in {1..$#fichiers}; do
+      [[ -n "${fini[$i]}" ]] && continue
+      nom=$noms[$i] d="$CU_CACHE/sources/$nom"
+      if [[ ! -f "$d/code" ]]; then en_cours+=("${M[title_$nom]:-$nom}"); continue; fi
+      fini[$i]=1
+      code=$(<"$d/code")
+      (( code == 99 )) && { progression "" 99 0; continue }
+      ajouter_section "$fichiers[$i]" $code "$d"
+      progression "${M[title_$nom]:-$nom}" $code $(<"$d/n")
+    done
+    (( $#en_cours )) || break
+    attente "${${M[still_checking]}/\%s/$images[tour % 10 + 1]}" "${en_cours[@]}"
+    (( tour++ ))
+    zselect -t 10 # 0,1 s
+  done
+  wait
+
+  # Rapport et liste dans l'ordre des sources
   for i in {1..$#fichiers}; do
-    f=$fichiers[$i] nom=$(nom_source "$f") d="$CU_CACHE/sources/$nom"
-    progression "${M[title_$nom]:-$nom}"
-    wait $pids[$i]
-    code=$(<"$d/code")
-    n_section=0
-    (( code == 99 )) || ajouter_section "$f" $code "$d"
-    progression "${M[title_$nom]:-$nom}" $code $n_section
+    nom=$noms[$i] d="$CU_CACHE/sources/$nom" code=$(<"$d/code")
+    (( code == 99 )) && continue
+    cat "$d/section.md" >> "$RAPPORT"
+    cat "$d/actions.tsv" >> "$ACTIONS"
+    (( $(<"$d/n") )) && resume+=("${M[title_$nom]:-$nom} $(<"$d/n")")
+    (( total += $(<"$d/n") ))
+    (( code )) && erreurs+=("${M[title_$nom]:-$nom}")
   done
 
   ln -sf "$RAPPORT" "$LOG_DIR/latest.md"

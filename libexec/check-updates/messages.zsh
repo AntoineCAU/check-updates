@@ -8,6 +8,7 @@ M=(
   up_to_date_short "up to date"
   check_failed_short "check failed"
   checking "Checking for updates…"
+  still_checking "%s Still checking:"
   count_one "1 update"
   count_many "%d updates"
   available_one "1 update available"
