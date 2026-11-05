@@ -112,17 +112,70 @@ def dernieres_versions(noms, url, extraire):
 
 # --- Gestionnaires de paquets -------------------------------------------------
 
+def infos(libelle, description, utilise_par):
+    """« =<TAB>libellé<TAB>description<TAB>utilisé par » : affiché sous la mise à jour dans
+    la liste. « utilisé par » : vide si installé à la demande, « - » pour une dépendance
+    dont plus rien ne se sert, sinon les noms séparés par des virgules."""
+    print("=\t" + "\t".join(propre(x) for x in (libelle, description, utilise_par)))
+
+
+def utilisateurs_brew(chemin):
+    """Pour chaque formule installée comme dépendance : les formules installées à la demande
+    qui en ont besoin, directement ou non : dépendances actuelles des formules, plus celles
+    enregistrées à leur installation (un binaire compilé avant un changement de dépendances
+    utilise toujours les anciennes). Rien si « brew info » n'a pas pu être lu."""
+    try:
+        with open(chemin) as f:
+            tout = json.load(f)
+        installees = {f["name"]: f for f in tout["formulae"]}
+        descriptions = {"cask:" + c["token"]: c.get("desc") or "" for c in tout.get("casks", [])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}, {}
+    def recu(f):
+        return f["installed"][-1] if f.get("installed") else {}
+
+    def dependances(f):
+        noms = list(f.get("dependencies", [])) + [d["full_name"] for d in recu(f).get("runtime_dependencies") or []]
+        return [n.split("/")[-1] for n in noms]
+    utilisateurs = {}
+    for nom, f in installees.items():
+        descriptions[nom] = f.get("desc") or ""
+        if not recu(f).get("installed_on_request", True):
+            utilisateurs[nom] = []
+    for nom, f in installees.items():
+        if not recu(f).get("installed_on_request"):
+            continue
+        vues, a_voir = set(), dependances(f)
+        while a_voir:
+            dep = a_voir.pop()
+            if dep in vues or dep not in installees:
+                continue
+            vues.add(dep)
+            a_voir += dependances(installees[dep])
+            if dep in utilisateurs:
+                utilisateurs[dep].append(nom)
+    return descriptions, utilisateurs
+
+
 def brew():
     d = lire_json(sys.stdin.read(), {})
     if not isinstance(d, dict) or "formulae" not in d or "casks" not in d:
         raise FormatInattendu("brew outdated --json=v2: keys 'formulae'/'casks' missing")
+    descriptions, utilisateurs = utilisateurs_brew(sys.argv[2]) if len(sys.argv) > 2 else ({}, {})
     for f in d["formulae"]:
         if not f.get("pinned"):
-            sortie(f"{f['name']} {f['installed_versions'][-1]} → {f['current_version']}", f"brew upgrade {q(f['name'])}")
+            libelle = f"{f['name']} {f['installed_versions'][-1]} → {f['current_version']}"
+            sortie(libelle, f"brew upgrade {q(f['name'])}")
+            noms = utilisateurs.get(f["name"])
+            if descriptions.get(f["name"]) or noms is not None:
+                infos(libelle, descriptions.get(f["name"], ""), "" if noms is None else ",".join(sorted(noms)) or "-")
     for c in d["casks"]:
         installee = c["installed_versions"]
         installee = installee[-1] if isinstance(installee, list) else installee
-        sortie(f"{c['name']} {installee} → {c['current_version']} (cask)", f"brew upgrade --cask {q(c['name'])}")
+        libelle = f"{c['name']} {installee} → {c['current_version']} (cask)"
+        sortie(libelle, f"brew upgrade --cask {q(c['name'])}")
+        if descriptions.get("cask:" + c["name"]):
+            infos(libelle, descriptions["cask:" + c["name"]], "")
 
 
 def npm():

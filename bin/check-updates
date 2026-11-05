@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.3.0
+VERSION=0.4.0
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -19,6 +19,7 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/check-updates/config"
 LOG_DIR="$HOME/Library/Logs/check-updates"
 export CU_CACHE="$HOME/Library/Caches/check-updates"
 ACTIONS="$LOG_DIR/actions.tsv"     # libellé <tab> commande, issus de la dernière vérification
+DETAILS="$LOG_DIR/details.tsv"     # « = <tab> libellé <tab> description <tab> utilisé par », pour la liste
 SELECTION="$CU_CACHE/selection.tsv" # mises à jour cochées, exécutées par « __run »
 IGNORED="${CONFIG:h}/ignored"       # « nom version » des mises à jour ignorées, une par ligne
 NOTIFIER_APP="$HOME/Library/Application Support/check-updates/check-updates.app"
@@ -115,7 +116,8 @@ ai_command() {
 # Contrat d'une source (libexec/check-updates/sources/NN-nom.zsh) :
 #   src_available  code 0 si l'outil est présent sur ce Mac
 #   src_check      une ligne « libellé<tab>commande » par mise à jour, « #<tab>texte »
-#                  pour une remarque ; code ≠ 0 si la vérification a échoué (outil en
+#                  pour une remarque, et si elle le sait « =<tab>libellé<tab>description<tab>
+#                  utilisé par » (voir infos() dans helpers.py) ; code ≠ 0 si la vérification a échoué (outil en
 #                  erreur, format de sortie inattendu…), plutôt que de se croire à jour
 # ---------------------------------------------------------------------------
 
@@ -128,11 +130,12 @@ lancer_source() { # fichier, dossier → $2/out, $2/err, $2/code (99 si l'outil 
 
 nom_source() { print -r -- "${${1:t:r}#<->-}" }
 
-ajouter_section() { # fichier source, code de retour, dossier → $d/section.md, $d/actions.tsv, $d/n
+ajouter_section() { # fichier source, code de retour, dossier → $d/section.md, $d/actions.tsv, $d/details.tsv, $d/n
   local nom=$(nom_source "$1") code=$2 d=$3 lignes notes ligne n
   local -a gardees ignorees
   # Exactement deux champs, libellé et commande : rien d'autre ne passe
-  lignes=$(grep -v "^#$T" "$d/out" | awk -F'\t' 'NF == 2 && $1 != "" && $2 != ""')
+  lignes=$(grep -v "^[#=]$T" "$d/out" | awk -F'\t' 'NF == 2 && $1 != "" && $2 != ""')
+  grep "^=$T" "$d/out" | awk -F'\t' 'NF == 4' > "$d/details.tsv"
   notes=$(grep "^#$T" "$d/out" | cut -f2-)
   for ligne in "${(@f)lignes}"; do
     [[ -z "$ligne" ]] && continue
@@ -182,6 +185,7 @@ verifier() { # [quiet]
   RAPPORT="$LOG_DIR/$(date +%F).md"
   total=0 resume=() erreurs=()
   : > "$ACTIONS"
+  : > "$DETAILS"
   print -r -- "# ${M[report_title]} — $(date '+%A %d %B %Y %H:%M')"$'\n' > "$RAPPORT"
   [[ -t 1 ]] && print -P -- "%B${M[checking]}%b"
 
@@ -220,6 +224,7 @@ verifier() { # [quiet]
     (( code == 99 )) && continue
     cat "$d/section.md" >> "$RAPPORT"
     cat "$d/actions.tsv" >> "$ACTIONS"
+    cat "$d/details.tsv" >> "$DETAILS" 2>/dev/null
     (( $(<"$d/n") )) && resume+=("${M[title_$nom]:-$nom} $(<"$d/n")")
     (( total += $(<"$d/n") ))
     (( code )) && erreurs+=("${M[title_$nom]:-$nom}")
@@ -246,8 +251,9 @@ verifier() { # [quiet]
     [[ -t 1 ]] && print -r -- "${M[opening_list]}"
     choisir
   elif (( $#erreurs )); then
-    [[ $(dialogue "${M[check_incomplete]}" "$(m sources_failed "${(j:, :)erreurs}")"$'\n'"${M[doctor_hint]}" "${M[open_report]}" "${M[ok]}") == "${M[open_report]}" ]] \
-      && open -t "$LOG_DIR/latest.md"
+    if [[ $(dialogue "${M[check_incomplete]}" "$(m sources_failed "${(j:, :)erreurs}")"$'\n'"${M[doctor_hint]}" "${M[open_report]}" "${M[ok]}") == "${M[open_report]}" ]]; then
+      open -t "$LOG_DIR/latest.md"
+    fi
   else
     notifier "$titre" "${M[all_good]}"
   fi
@@ -323,23 +329,42 @@ etiquette() { # libellé, commande
   fi
 }
 
+# Ligne de description sous une mise à jour, et si c'est une dépendance (Homebrew) :
+# « description · used by git, php » <tab> 1
+description() { # libellé (tableau associatif « details » rempli par choisir)
+  local -a champs=("${(@ps:\t:)details[$1]}") noms
+  local texte=$champs[1] utilise=$champs[2] dep=""
+  if [[ "$utilise" == - ]]; then
+    texte+="${texte:+ · }${M[unused]}" dep=1
+  elif [[ -n "$utilise" ]]; then
+    noms=(${(s:,:)utilise})
+    (( $#noms > 3 )) && utilise="${(j:, :)noms[1,3]} +$(( $#noms - 3 ))" || utilise=${(j:, :)noms}
+    texte+="${texte:+ · }$(m used_by "$utilise")" dep=1
+  fi
+  print -r -- "$texte$T$dep"
+}
+
 choisir() {
   if [[ ! -s "$ACTIONS" ]]; then notifier check-updates "${M[nothing_pending]}"; return; fi
   local -a libelles commandes lignes ordre
+  local -A details
   local l c i k tag ligne choix texte erreurs_connues automatiques=0
   while IFS=$T read -r l c; do libelles+=("$l") commandes+=("$c"); done < "$ACTIONS"
+  [[ -s "$DETAILS" ]] && while IFS= read -r ligne; do
+    l=${${ligne#=$T}%%$T*} details[$l]=${${ligne#=$T}#*$T}
+  done < "$DETAILS"
   # Les automatiques d'abord (case cochée, sauf version majeure), puis celles à faire
   # soi-même (bouton Open, qui reçoit sa commande) ; ordre[] renvoie à libelles[]
   for i in {1..$#libelles}; do
     [[ "$commandes[$i]" == open\ * ]] && continue
     tag=$(etiquette "$libelles[$i]" "$commandes[$i]")
     [[ "$tag" == major ]] && k=B || k=A
-    ordre+=($i) lignes+=("$k$T$(decouper "$libelles[$i]")$T$tag")
+    ordre+=($i) lignes+=("$k$T$(decouper "$libelles[$i]")$T$tag$T$T$(description "$libelles[$i]")")
     (( automatiques++ ))
   done
   for i in {1..$#libelles}; do
     [[ "$commandes[$i]" == open\ * ]] || continue
-    ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")$T$(etiquette "$libelles[$i]" "$commandes[$i]")$T$commandes[$i]")
+    ordre+=($i) lignes+=("M$T$(decouper "$libelles[$i]")$T$(etiquette "$libelles[$i]" "$commandes[$i]")$T$commandes[$i]$T$(description "$libelles[$i]")")
   done
 
   (( automatiques )) && texte=${M[pick_hint]} || texte=${M[pick_hint_manual]}
@@ -348,7 +373,8 @@ choisir() {
 
   choix=$(osascript "$LIB/picker.applescript" "$(nb $#libelles available)" "$texte" \
     "${M[update_btn]}" "${M[later]}" "${M[done_btn]}" "${M[open_btn]}" "${M[opened]}" "${M[ignore_btn]}" "${M[ignored_btn]}" \
-    "${M[group_auto]}" "${M[group_auto_hint]}" "${M[group_manual]}" "${M[group_manual_hint]}" "${lignes[@]}" 2>/dev/null)
+    "${M[group_auto]}" "${M[group_auto_hint]}" "${M[group_manual]}" "${M[group_manual_hint]}" \
+    "${M[group_deps]}" "${M[group_deps_hint]}" "${M[deps_all]}" "${M[show_btn]}" "${lignes[@]}" 2>/dev/null)
   cles_actions > "$CU_CACHE/last_shown"
 
   # « u N » : à installer ; « i N » : à ignorer désormais
@@ -366,7 +392,7 @@ choisir() {
   fi
   if [[ ! -s "$SELECTION" ]]; then
     (( automatiques )) && [[ -t 1 ]] && print -r -- "${M[nothing_selected]}"
-    return
+    return 0 # « Later » n'est pas un échec (launchd garde le code de sortie, que doctor lit)
   fi
 
   # Lancé depuis un terminal : les mises à jour s'y déroulent ; sinon (launchd) on en ouvre un
@@ -611,7 +637,7 @@ diagnostiquer() {
     if (( ${SKIP[(Ie)$nom]} )); then etat off "${M[title_$nom]:-$nom} — ${M[doctor_skipped]}"; continue; fi
     debut=$EPOCHREALTIME
     lancer_source "$f" "$CU_CACHE/sources/$nom"; code=$(<"$CU_CACHE/sources/$nom/code")
-    n=$(grep -v "^#$T" "$CU_CACHE/sources/$nom/out" | grep -c "$T")
+    n=$(grep -v "^[#=]$T" "$CU_CACHE/sources/$nom/out" | grep -c "$T")
     case $code in
       99) etat off "${M[title_$nom]:-$nom} — ${M[doctor_absent]}" ;;
       0) etat ok "${M[title_$nom]:-$nom} — $(nb $n count) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)" ;;

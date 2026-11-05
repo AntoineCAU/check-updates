@@ -48,6 +48,12 @@ M=(
   group_auto_hint "installed in a terminal"
   group_manual "Up to you"
   group_manual_hint "update them in System Settings, the app or its website"
+  group_deps "Dependencies"
+  group_deps_hint "installed by Homebrew for your other tools, safe to update"
+  deps_all "Update all %d"
+  show_btn "Show"
+  used_by "used by %s"
+  unused "no longer used by anything"
 
   settings "System Settings"
   node_same "same major, becomes the default"

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Homebrew updates show what they are (“Mozilla CA certificate store”) right under their name.
+- Dependencies, the libraries Homebrew installed for your other tools, get their own group, folded into one **Update all** line; **Show** lists each one with the tools that use it (“used by git, php”).
+- Fix: clicking **Later** in a list opened by the daily check made `doctor` report that the last run failed.
+
 ## 0.3.0
 
 - New sources: Bun and Deno (installed with their own script), TeX Live (`tlmgr`), GitHub CLI extensions and VS Code extensions (stable versions compatible with your VS Code).

@@ -51,6 +51,34 @@ EOF
 ngrok 3.1.0 → 3.2.0 (cask)${T}brew upgrade --cask ngrok
 [code 0]"
 
+# Descriptions et « utilisé par » : git a été compilé avec lz4 (dépendance enregistrée à
+# l'installation), php utilise openexr par gd, qui en dépendait quand il a été installé
+installees='{"formulae":[
+{"name":"nvm","desc":"Manage multiple Node.js versions","dependencies":[],"installed":[{"installed_on_request":true,"runtime_dependencies":[]}]},
+{"name":"git","desc":"Distributed revision control system","dependencies":["pcre2"],"installed":[{"installed_on_request":true,"runtime_dependencies":[{"full_name":"lz4"}]}]},
+{"name":"php","desc":"PHP","dependencies":["gd"],"installed":[{"installed_on_request":true,"runtime_dependencies":[]}]},
+{"name":"gd","desc":"Graphics library","dependencies":[],"installed":[{"installed_on_request":false,"runtime_dependencies":[{"full_name":"openexr"}]}]},
+{"name":"lz4","desc":"Extremely Fast Compression algorithm","dependencies":[],"installed":[{"installed_on_request":false,"runtime_dependencies":[]}]},
+{"name":"openexr","desc":"High dynamic-range image file format","dependencies":[],"installed":[{"installed_on_request":false,"runtime_dependencies":[]}]},
+{"name":"orphan","desc":"","dependencies":[],"installed":[{"installed_on_request":false,"runtime_dependencies":[]}]}],
+"casks":[{"token":"ngrok","desc":"Reverse proxy"}]}'
+obtenu=$(print -r -- '{"formulae":[
+{"name":"nvm","installed_versions":["0.40.8"],"current_version":"0.41.0","pinned":false},
+{"name":"lz4","installed_versions":["1.10.0"],"current_version":"1.11.0","pinned":false},
+{"name":"openexr","installed_versions":["3.5.3"],"current_version":"3.5.3_1","pinned":false},
+{"name":"orphan","installed_versions":["1"],"current_version":"2","pinned":false}],
+"casks":[{"name":"ngrok","installed_versions":"3.1.0","current_version":"3.2.0"}]}' | helper brew <(print -r -- "$installees") | grep "^=")
+attendu="=${T}nvm 0.40.8 → 0.41.0${T}Manage multiple Node.js versions${T}
+=${T}lz4 1.10.0 → 1.11.0${T}Extremely Fast Compression algorithm${T}git
+=${T}openexr 3.5.3 → 3.5.3_1${T}High dynamic-range image file format${T}php
+=${T}orphan 1 → 2${T}${T}-
+=${T}ngrok 3.1.0 → 3.2.0 (cask)${T}Reverse proxy${T}"
+if [[ "$obtenu" == "$attendu" ]]; then
+  print -P "%F{green}ok%f   brew: descriptions and dependents"
+else
+  print -P "%F{red}FAIL%f brew: descriptions and dependents"; print -r -- "  expected: ${(q+)attendu}"$'\n'"  got:      ${(q+)obtenu}"; (( echecs++ ))
+fi
+
 teste "brew: unknown format fails" 20-brew.zsh 'brew() { [[ $1 == update ]] && return 0; print "{\"packages\": []}" }' "[code 3]"
 
 teste "brew: update failure is a note" 20-brew.zsh 'brew() { [[ $1 == update ]] && { print -u2 "Error: homebrew/cask-fonts does not exist!"; return 1 }; print "{\"formulae\":[],\"casks\":[]}" }' \
@@ -180,6 +208,30 @@ faux() { if eval "$2"; then egal "$1" faux vrai; else egal "$1" faux faux; fi }
   RAPPORT=/dev/null ajouter_section "$LIB/sources/20-brew.zsh" 0 "$d"
   egal "only two-field lines become actions" "Good 1.0 → 2.0${T}echo ok" "$(<"$d/actions.tsv")"
   rm -rf "$d"
+  typeset -A details=(
+    "lz4 1.10.0 → 1.11.0" "Extremely Fast Compression algorithm${T}git,imagemagick,librsvg,php"
+    "orphan 1 → 2" "${T}-"
+    "nvm 0.40.8 → 0.41.0" "Manage multiple Node.js versions${T}")
+  egal "description: dependency used by others" "Extremely Fast Compression algorithm · used by git, imagemagick, librsvg +1${T}1" "$(description "lz4 1.10.0 → 1.11.0")"
+  egal "description: unused dependency" "${M[unused]}${T}1" "$(description "orphan 1 → 2")"
+  egal "description: installed on request" "Manage multiple Node.js versions${T}" "$(description "nvm 0.40.8 → 0.41.0")"
+  egal "description: unknown" "$T" "$(description "npm 1 → 2")"
+
+  # Fenêtre de choix, boutons simulés : dépendances repliées (Update all) ou dépliées (Show)
+  arguments=(t x "${M[update_btn]}" "${M[later]}" "${M[done_btn]}" "${M[open_btn]}" "${M[opened]}" "${M[ignore_btn]}" "${M[ignored_btn]}" a b c d e f "${M[deps_all]}" "${M[show_btn]}"
+    "A${T}nvm${T}1 → 2" "A${T}dep1${T}1 → 2${T}${T}${T}x${T}1" "B${T}dep2${T}1 → 2${T}major${T}${T}x${T}1" "A${T}dep3${T}1 → 2${T}${T}${T}${T}1" "M${T}Firefox${T}1 → 2${T}${T}open -a Firefox")
+  egal "picker: Update with dependencies folded" "u 1 u 2 u 4" "$(CU_PICKER_TEST=1 osascript "$LIB/picker.applescript" "${arguments[@]}" | tr '\n' ' ' | sed 's/ $//')"
+  egal "picker: Show then Update" "u 1 u 2 u 4" "$(CU_PICKER_TEST=2,1 osascript "$LIB/picker.applescript" "${arguments[@]}" | tr '\n' ' ' | sed 's/ $//')"
+  egal "picker: Later" "" "$(CU_PICKER_TEST=0 osascript "$LIB/picker.applescript" "${arguments[@]}")"
+  # Hors terminal (launchd), « Later » ne doit pas finir en échec : doctor lit le code de sortie
+  (
+    ACTIONS=$(mktemp) DETAILS=$(mktemp) CU_CACHE=$(mktemp -d)
+    print -r -- "nvm 0.40.8 → 0.41.0${T}brew upgrade nvm" > "$ACTIONS"
+    CU_PICKER_TEST=0 choisir >/dev/null
+    egal "list: Later exits 0" 0 $?
+    rm -rf "$ACTIONS" "$DETAILS" "$CU_CACHE"
+  )
+
   egal "key: gh extension commit" "gh-branch 7ed0aff7" "$(cle "gh-branch (commit 7ed0aff7)")"
   egal "key: TeX Live" "TeX Live 2025" "$(cle "TeX Live 2025 (12 packages)")"
 

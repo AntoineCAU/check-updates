@@ -12,10 +12,13 @@ Like [Topgrade](https://github.com/topgrade-rs/topgrade), but it checks first an
 brew install antoinecau/tap/check-updates
 ```
 
-Run `check-updates` whenever you want. It checks every source in parallel, shows its progress, then opens a checklist in two groups:
+Run `check-updates` whenever you want. It checks every source in parallel, shows its progress, then opens a checklist in up to three groups:
 
 - **Automatic** (ticked by default, except major versions): installed right away in your terminal, so you can follow them and type your password when needed;
+- **Dependencies**: libraries Homebrew installed for your other tools, folded into one **Update all** line (**Show** lists them);
 - **Up to you**: macOS and apps that update themselves — each has an **Open** button for System Settings, the app or its website.
+
+Homebrew updates say what they are and, for dependencies, which of your tools use them (“used by git, php”), so you know what you are updating.
 
 Major versions are tagged **major**, and updates Apple labels as security fixes are tagged **security**. **Ignore** hides a version until a newer one comes out (`check-updates ignored` lists them, `check-updates unignore <name>` brings one back). The daily check only opens the window when something new showed up since the last list.
 
@@ -92,7 +95,7 @@ Add a `title_name` entry in `libexec/check-updates/messages.zsh` and a test in `
 Bump `VERSION` in `bin/check-updates`, add an entry to `CHANGELOG.md`, then push a tag:
 
 ```sh
-git tag v0.3.1 && git push origin main v0.3.1
+git tag v0.4.1 && git push origin main v0.4.1
 ```
 
 The release page is created from the changelog entry right away. Within the hour, the tap's workflow copies `packaging/homebrew/check-updates.rb` to the tap with the new archive URL and sha256 (run it right away with `gh workflow run update-check-updates.yml -R AntoineCAU/homebrew-tap`).

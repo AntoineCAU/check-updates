@@ -6,5 +6,7 @@ src_check() {
     print -r -- "#$T${M[brew_update_failed]} $(print -r -- "$erreur" | grep -m1 '^Error:')"
   fi
   json=$(brew outdated --json=v2) || return 1
-  print -r -- "$json" | helper brew
+  # Descriptions et dépendances des formules installées, pour dire dans la liste à quoi
+  # sert chacune (facultatif : sans elles, la liste n'a simplement pas de description)
+  print -r -- "$json" | helper brew <(brew info --json=v2 --installed 2>/dev/null)
 }
