@@ -105,6 +105,22 @@ EOF
 rustup 1.27.0 → 1.27.1${T}rustup self update
 [code 0]"
 
+# Format actuel (relevé en CI, novembre 2026) : minuscules, et code d'erreur quand il y a
+# une mise à jour
+teste "rustup: current format, non-zero exit" 63-rustup.zsh 'rustup() { cat <<"EOF"
+stable-aarch64-apple-darwin - update available: 1.99.1 (58cf8f9c3 2026-10-13) -> 1.100.0 (0ef1bc386 2026-11-09)
+nightly-aarch64-apple-darwin - up to date: 1.101.0-nightly (2b5c8f1d0 2026-11-15)
+EOF
+return 100
+}' "stable-aarch64-apple-darwin 1.99.1 → 1.100.0${T}rustup update stable-aarch64-apple-darwin
+[code 0]"
+
+teste "rustup: up to date" 63-rustup.zsh 'rustup() { print "stable-aarch64-apple-darwin - up to date: 1.100.0 (0ef1bc386 2026-11-09)" }' "[code 0]"
+
+teste "rustup: real failure" 63-rustup.zsh 'rustup() { print -u2 "error: could not download file from https://static.rust-lang.org"; return 1 }' "[code 1]"
+
+teste "rustup: unknown format fails" 63-rustup.zsh 'rustup() { print "stable: version 1.100.0 is out" }' "[code 3]"
+
 teste "uv: tools" 61-uv.zsh 'uv() { print "ruff v0.0.1\n- ruff\nzzz-not-on-pypi-check-updates v1.0.0\n- zzz" }' \
   "ruff 0.0.1 → $(curl -fsS --max-time 10 https://pypi.org/pypi/ruff/json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')${T}uv tool upgrade ruff
 [code 0]"

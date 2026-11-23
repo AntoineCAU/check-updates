@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.4.0
+VERSION=0.4.1
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -368,7 +368,7 @@ choisir() {
   done
 
   (( automatiques )) && texte=${M[pick_hint]} || texte=${M[pick_hint_manual]}
-  erreurs_connues=$(<"$CU_CACHE/last_errors" 2>/dev/null)
+  [[ -r "$CU_CACHE/last_errors" ]] && erreurs_connues=$(<"$CU_CACHE/last_errors")
   [[ -n "$erreurs_connues" ]] && texte+=$'\n\n'"$(m sources_failed "${(pj:, :)${(f)erreurs_connues}}")"$'\n'"${M[doctor_hint]}"
 
   choix=$(osascript "$LIB/picker.applescript" "$(nb $#libelles available)" "$texte" \
@@ -608,8 +608,12 @@ diagnostiquer() {
   print -P -- "%Bcheck-updates $VERSION%b — macOS $(sw_vers -productVersion), zsh $ZSH_VERSION${commands[brew]:+, $(brew --version 2>/dev/null | head -1)}"
 
   print -P -- $'\n'"%B${M[doctor_env]}%b"
-  if /usr/bin/python3 -I -c 'import json, plistlib, urllib.request, xml.etree.ElementTree' 2>/dev/null; then
+  if /usr/bin/python3 -I -c 'import json, plistlib, urllib.request, xml.etree.ElementTree' 2>"$CU_CACHE/source.err"; then
     etat ok "$(/usr/bin/python3 --version 2>&1)"
+  elif grep -q 'xcodebuild -license' "$CU_CACHE/source.err"; then
+    # Après une mise à jour de Xcode, /usr/bin/python3 refuse de démarrer tant que la
+    # nouvelle licence n'est pas acceptée
+    etat ko "python3 — sudo xcodebuild -license accept"
   else
     etat ko "python3 — xcode-select --install"
   fi

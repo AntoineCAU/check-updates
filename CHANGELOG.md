@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Fix: the Rust (rustup) check failed with recent rustup versions, which changed their output and exit with an error when an update is available.
+- `doctor` gives the right fix when Python won't start because the Xcode license hasn't been accepted (`sudo xcodebuild -license accept`).
+
 ## 0.4.0
 
 - Homebrew updates show what they are (“Mozilla CA certificate store”) right under their name.
