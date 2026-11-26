@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- Homebrew formulae and casks from taps you haven't trusted are no longer skipped silently: since Homebrew 6, `brew outdated` ignores them, so check-updates now lists each one with the command to trust it (`brew trust --formula user/tap/name`).
+- `doctor` shows the notes a source leaves (stale Homebrew catalog, untrusted tap, App Store apps without `mas`) under its line.
+
 ## 0.4.1
 
 - Fix: the Rust (rustup) check failed with recent rustup versions, which changed their output and exit with an error when an update is available.

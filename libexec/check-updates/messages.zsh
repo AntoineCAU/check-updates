@@ -62,6 +62,7 @@ M=(
   open_site "opens the vendor's website"
   mas_hint "Some apps come from the App Store: install mas (brew install mas) to check them too."
   brew_update_failed "brew update failed: the Homebrew catalog may be stale."
+  brew_untrusted "%s is not checked: Homebrew skips taps you have not trusted. To check it: %s"
   omz_behind "Oh My Zsh (%s commits behind)"
 
   title_macos "macOS"

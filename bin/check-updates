@@ -3,7 +3,7 @@
 # outils en ligne de commande), propose de choisir quoi mettre à jour et suit les erreurs.
 # https://github.com/AntoineCAU/check-updates
 
-VERSION=0.4.1
+VERSION=0.4.2
 SELF="${0:a}"                          # chemin d'appel : le lien Homebrew reste valable d'une version à l'autre
 LIB="${0:A:h:h}/libexec/check-updates" # fichiers réels, à côté du binaire résolu
 T=$'\t'
@@ -595,7 +595,7 @@ desactiver() {
 # ---------------------------------------------------------------------------
 
 diagnostiquer() {
-  local ko=0 f nom code debut n
+  local ko=0 f nom code debut n notes
   etat() { # ok|warn|ko|off, texte
     case $1 in
       ok) print -P -- "  %F{green}✔%f $2" ;;
@@ -642,9 +642,12 @@ diagnostiquer() {
     debut=$EPOCHREALTIME
     lancer_source "$f" "$CU_CACHE/sources/$nom"; code=$(<"$CU_CACHE/sources/$nom/code")
     n=$(grep -v "^[#=]$T" "$CU_CACHE/sources/$nom/out" | grep -c "$T")
+    notes=$(grep "^#$T" "$CU_CACHE/sources/$nom/out" | cut -f2-)
     case $code in
       99) etat off "${M[title_$nom]:-$nom} — ${M[doctor_absent]}" ;;
-      0) etat ok "${M[title_$nom]:-$nom} — $(nb $n count) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)" ;;
+      # Remarques de la source (catalogue Homebrew périmé, tap non approuvé…) : à voir, pas un échec
+      0) etat ${${notes:+warn}:-ok} "${M[title_$nom]:-$nom} — $(nb $n count) ($(printf %.1f $(( EPOCHREALTIME - debut )))s)"
+         [[ -n "$notes" ]] && print -r -- "$notes" | sed 's/^/      /' ;;
       *) etat ko "${M[title_$nom]:-$nom} — code $code"
          tail -n 4 "$CU_CACHE/sources/$nom/err" | sed 's/^/      /' ;;
     esac

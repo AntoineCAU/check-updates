@@ -178,6 +178,26 @@ def brew():
             infos(libelle, descriptions["cask:" + c["name"]], "")
 
 
+def brew_untrusted():
+    """Formules et casks installés depuis un tap non approuvé : depuis Homebrew 6, « brew
+    outdated » les saute sans rien dire. Une ligne « nom complet<TAB>commande pour l'approuver »
+    par élément. Arguments : sorties de « brew tap-info --installed --json », « brew trust
+    --json=v1 », « brew list --formula --full-name » et « brew list --cask --full-name »."""
+    def lire(chemin):
+        with open(chemin) as f:
+            return f.read()
+    confiance = lire_json(lire(sys.argv[3]), None)
+    if confiance is None:  # pas de « brew trust » (Homebrew < 6) : tous les taps sont chargés
+        return
+    approuves = {x.lower() for cle in ("taps", "formulae", "casks") for x in confiance.get(cle) or []}
+    douteux = {t["name"].lower() for t in lire_json(lire(sys.argv[2]), [])
+               if not t.get("official") and t.get("trusted") is False} - approuves
+    for chemin, option in ((sys.argv[4], "--formula"), (sys.argv[5], "--cask")):
+        for nom in lire(chemin).split():
+            if nom.count("/") == 2 and nom.rsplit("/", 1)[0].lower() in douteux and nom.lower() not in approuves:
+                sortie(nom, f"brew trust {option} {q(nom)}")
+
+
 def npm():
     d = lire_json(sys.stdin.read(), {})
     if not isinstance(d, dict) or "error" in d:
@@ -659,7 +679,7 @@ def selftest():
     print("ok")
 
 
-COMMANDES = {f.__name__: f for f in (brew, npm, pnpm, composer, mise, pipx, uv, cargo, tlmgr, bun, deno, gh, vscode,
+COMMANDES = {f.__name__: f for f in (brew, brew_untrusted, npm, pnpm, composer, mise, pipx, uv, cargo, tlmgr, bun, deno, gh, vscode,
                                       apps, redact, selftest)}
 
 if __name__ == "__main__":

@@ -79,6 +79,36 @@ else
   print -P "%F{red}FAIL%f brew: descriptions and dependents"; print -r -- "  expected: ${(q+)attendu}"$'\n'"  got:      ${(q+)obtenu}"; (( echecs++ ))
 fi
 
+# Taps non approuvés (Homebrew 6+) : brew outdated saute leurs formules sans rien dire.
+# antoinecau/tap n'est pas approuvé mais check-updates l'est (installé par son nom complet),
+# vendor/tap est approuvé en entier, homebrew/core est officiel
+taps='[{"name":"antoinecau/tap","official":false,"trusted":false},
+{"name":"symfony-cli/tap","official":false,"trusted":false},
+{"name":"Other/Casks","official":false,"trusted":false},
+{"name":"vendor/tap","official":false,"trusted":false},
+{"name":"homebrew/core","official":true,"trusted":true}]'
+confiance='{"taps":["vendor/tap"],"formulae":["antoinecau/tap/check-updates"],"casks":[],"commands":[]}'
+formules=$'git\nantoinecau/tap/check-updates\nsymfony-cli/tap/symfony-cli\nvendor/tap/tool'
+casks=$'firefox\nother/casks/thing'
+egal_untrusted() { # nom, attendu, tap-info, trust
+  local obtenu=$(helper brew_untrusted <(print -r -- "$3") <(print -r -- "$4") <(print -r -- "$formules") <(print -r -- "$casks") 2>/dev/null; print "[code $?]")
+  [[ "$obtenu" == "$2" ]] && print -P "%F{green}ok%f   $1" || { print -P "%F{red}FAIL%f $1"; print -r -- "  expected: ${(q+)2}"$'\n'"  got:      ${(q+)obtenu}"; (( echecs++ )) }
+}
+egal_untrusted "brew: untrusted taps are reported" "symfony-cli/tap/symfony-cli${T}brew trust --formula symfony-cli/tap/symfony-cli
+other/casks/thing${T}brew trust --cask other/casks/thing
+[code 0]" "$taps" "$confiance"
+egal_untrusted "brew: Homebrew without tap trust" "[code 0]" "$taps" ""
+egal_untrusted "brew: unknown trust format fails" "[code 3]" "$taps" "not json"
+
+teste "brew: untrusted tap becomes a note" 20-brew.zsh 'brew() { case $1 in
+  update) return 0 ;;
+  outdated) print "{\"formulae\":[],\"casks\":[]}" ;;
+  tap-info) print "[{\"name\":\"symfony-cli/tap\",\"official\":false,\"trusted\":false}]" ;;
+  trust) print "{\"taps\":[],\"formulae\":[],\"casks\":[]}" ;;
+  list) [[ $2 == --formula ]] && print "symfony-cli/tap/symfony-cli" ;;
+esac }' "#$T$(m brew_untrusted symfony-cli "brew trust --formula symfony-cli/tap/symfony-cli")
+[code 0]"
+
 teste "brew: unknown format fails" 20-brew.zsh 'brew() { [[ $1 == update ]] && return 0; print "{\"packages\": []}" }' "[code 3]"
 
 teste "brew: update failure is a note" 20-brew.zsh 'brew() { [[ $1 == update ]] && { print -u2 "Error: homebrew/cask-fonts does not exist!"; return 1 }; print "{\"formulae\":[],\"casks\":[]}" }' \
